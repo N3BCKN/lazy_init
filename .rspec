@@ -1,0 +1,4 @@
+# .rspec
+--format documentation
+--color
+--require spec_helper

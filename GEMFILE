@@ -1,15 +1,5 @@
-# Gemfile
-# frozen_string_literal: true
-
 source 'https://rubygems.org'
 
-# Specify your gem's dependencies in lazy_init.gemspec
 gemspec
 
-gem 'pry', '~> 0.14' # For development console
-
-
-# .rspec
---format documentation
---color
---require spec_helper
+gem 'pry', '~> 0.14'

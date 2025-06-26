@@ -28,15 +28,12 @@ Gem::Specification.new do |spec|
   spec.executables   = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ['lib']
 
-  # Ruby version requirement
-  spec.required_ruby_version = '>= 2.6.0'
-
-  # No runtime dependencies - this is a feature!
+  spec.required_ruby_version = '>= 2.6'
   
   # Development dependencies
   spec.add_development_dependency 'rspec', '~> 3.12'
   spec.add_development_dependency 'benchmark-ips', '~> 2.10'
-  spec.add_development_dependency 'rubocop', '~> 1.56'
+  spec.add_development_dependency 'rubocop', '~> 1.50.2'
   spec.add_development_dependency 'yard', '~> 0.9'
   spec.add_development_dependency 'rake', '~> 13.0'
 end
