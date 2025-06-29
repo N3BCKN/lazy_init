@@ -181,7 +181,7 @@ RSpec.describe LazyInit::LazyValue do
     end
   end
 
-  describe 'thread safety' do
+describe 'thread safety' do
     it 'ensures block is called only once with concurrent access' do
       call_count = 0
       lazy_value = described_class.new do
@@ -228,6 +228,57 @@ RSpec.describe LazyInit::LazyValue do
       # After all threads complete, all should report as computed
       expect(value_results.uniq).to eq(['result'])
       expect(computed_checks.last(20)).to all(be true)
+    end
+
+    it 'fast path maintains thread safety under high concurrency' do
+      lazy_value = described_class.new { 'fast_path_result' }
+      
+      # warm up to enable fast path
+      lazy_value.value
+      
+      # high concurrency test on warm lazy value
+      results = run_in_threads(200) { lazy_value.value }
+      
+      # all should get same result via fast path
+      expect(results.uniq).to eq(['fast_path_result'])
+      expect(results.size).to eq(200)
+    end
+
+    it 'handles concurrent reset operations safely' do
+      computation_count = 0
+      lazy_value = described_class.new do
+        computation_count += 1
+        "computation_#{computation_count}"
+      end
+
+      # initial computation
+      first_result = lazy_value.value
+      expect(first_result).to eq('computation_1')
+
+      results = []
+      
+      # mix of value access and reset operations
+      threads = []
+      
+      10.times do
+        threads << Thread.new do
+          5.times { results << lazy_value.value }
+        end
+      end
+      
+      3.times do
+        threads << Thread.new do
+          sleep(0.01)
+          lazy_value.reset!
+        end
+      end
+
+      threads.each(&:join)
+
+      # should have multiple different results due to resets
+      unique_results = results.uniq.sort
+      expect(unique_results.size).to be >= 2
+      expect(unique_results).to all(match(/^computation_\d+$/))
     end
   end
 end
