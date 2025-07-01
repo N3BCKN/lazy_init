@@ -3,95 +3,128 @@
 require 'set'
 
 module LazyInit
-  # FAZA 1: Drastically optimized dependency resolver
-  # Target: Reduce complex dependencies from 142x → 5-10x slower than manual
-  # 
-  # KEY OPTIMIZATIONS:
-  # 1. Pre-compute dependency order at class definition time (O(1) runtime lookup)
-  # 2. Eliminate recursive graph traversal on each access
-  # 3. Use flat array iteration instead of hash-based resolution
-  # 4. Cache computed state checks to avoid redundant dependency triggering
+  # Manages dependency resolution for lazy attributes.
+  #
+  # This class handles the computation order of lazy attributes that depend on other
+  # lazy attributes. It ensures dependencies are resolved in the correct order and
+  # provides efficient resolution using pre-computed dependency chains.
+  #
+  # @example Dependency chain
+  #   # Given these definitions:
+  #   lazy_attr_reader :config do
+  #     load_configuration
+  #   end
+  #   
+  #   lazy_attr_reader :database, depends_on: [:config] do
+  #     Database.connect(config.database_url)
+  #   end
+  #   
+  #   # When accessing :database, the resolver ensures :config is computed first
+  #
+  # @api private
+  # @since 0.1.0
   class DependencyResolver
+    # Initializes a new dependency resolver for the given class.
+    #
+    # @param target_class [Class] the class this resolver manages dependencies for
     def initialize(target_class)
       @target_class = target_class
       @dependency_graph = {}
-      # OPTIMIZATION 1: Pre-computed resolution orders for O(1) lookup
       @resolution_orders = {}
       @mutex = Mutex.new
     end
 
-    # Compute dependency order once at definition time, not runtime
+    # Adds a dependency relationship for an attribute.
+    #
+    # This method registers that the given attribute depends on other attributes
+    # and pre-computes the resolution order for efficient runtime access.
+    #
+    # @param attribute [Symbol] the attribute that has dependencies
+    # @param dependencies [Array<Symbol>, Symbol] the attributes this depends on
+    # @return [void]
+    # @raise [DependencyError] if a circular dependency is detected
+    #
+    # @example Adding dependencies
+    #   resolver.add_dependency(:database, [:config])
+    #   resolver.add_dependency(:api_client, [:config, :database])
     def add_dependency(attribute, dependencies)
       @mutex.synchronize do
         @dependency_graph[attribute] = Array(dependencies)
-        # Immediately compute and cache the resolution order
         @resolution_orders[attribute] = compute_resolution_order(attribute)
-        
-        # Also invalidate any cached orders that might depend on this attribute
         invalidate_dependent_orders(attribute)
       end
     end
 
-    # O(1) dependency resolution using pre-computed order
-    # This replaces the expensive recursive graph traversal with simple array iteration
+    # Resolves dependencies for an attribute by ensuring all dependencies are computed.
+    #
+    # This method checks each dependency and triggers its computation if it hasn't
+    # been computed yet. It uses the pre-computed resolution order for efficiency.
+    #
+    # @param attribute [Symbol] the attribute whose dependencies should be resolved
+    # @param instance [Object] the instance on which to resolve dependencies
+    # @return [void]
+    #
+    # @example Resolving dependencies
+    #   # This will ensure :config is computed before :database
+    #   resolver.resolve_dependencies(:database, my_instance)
     def resolve_dependencies(attribute, instance)
       resolution_order = @resolution_orders[attribute]
       return unless resolution_order
 
-      # OPTIMIZATION 4: Use cached computed state to avoid redundant calls
       resolution_order.each do |dep|
-        # Fast check: skip if already computed using cached state
         next if instance_computed?(instance, dep)
-        
-        # Trigger dependency computation
         instance.send(dep)
       end
     end
 
-    # Public method for introspection (maintains API compatibility)
+    # Returns the resolution order for the given attribute.
+    #
+    # This is primarily used for introspection and debugging purposes.
+    #
+    # @param attribute [Symbol] the attribute to get resolution order for
+    # @return [Array<Symbol>, nil] the ordered list of dependencies, or nil if none
+    #
+    # @example Getting resolution order
+    #   resolver.resolution_order_for(:database)  #=> [:config]
+    #   resolver.resolution_order_for(:api_client) #=> [:config, :database]
     def resolution_order_for(attribute)
       @resolution_orders[attribute]
     end
 
     private
 
-    # Fast computed state check without method calls
-    # This avoids the overhead of calling dependency_computed? method
+    # Checks if an attribute has been computed on the given instance.
+    #
+    # @param instance [Object] the instance to check
+    # @param attribute [Symbol] the attribute to check
+    # @return [Boolean] true if the attribute has been computed
     def instance_computed?(instance, attribute)
-      # Check the internal computed state directly
-      # This works with both current and future implementations
-      computed_var = "@#{attribute}_computed"
-      lazy_value_var = "@#{attribute}_lazy_value"
-      
-      # Handle current LazyValue implementation
-      if instance.instance_variable_defined?(lazy_value_var)
-        lazy_value = instance.instance_variable_get(lazy_value_var)
-        return lazy_value && lazy_value.computed?
-      end
-      
-      # Handle direct instance variable implementation (future optimization)
-      if instance.instance_variable_defined?(computed_var)
-        return instance.instance_variable_get(computed_var)
-      end
-      
-      false
+      lazy_value = instance.instance_variable_get("@#{attribute}_lazy_value")
+      lazy_value&.computed?
     end
 
-    # Efficient topological sort with cycle detection
-    # FIX: Only resolve direct dependencies, not transitive ones
+    # Computes the resolution order for an attribute.
+    #
+    # Currently returns only direct dependencies. Each dependency will handle
+    # its own sub-dependencies when accessed, avoiding redundant computation.
+    #
+    # @param start_attribute [Symbol] the attribute to compute order for
+    # @return [Array<Symbol>] the ordered list of direct dependencies
     def compute_resolution_order(start_attribute)
       dependencies = @dependency_graph[start_attribute]
       return [] unless dependencies && dependencies.any?
 
-      # SIMPLE FIX: Just return direct dependencies
-      # Each dependency will handle its own sub-dependencies when accessed
-      # This eliminates redundant transitive dependency checks
       dependencies.dup
     end
 
-    # Efficient subgraph collection - NO LONGER NEEDED
-    # Since we only resolve direct dependencies, we don't need to collect subgraphs
-    # Keeping this method for backward compatibility but it's not used
+    # Collects all attributes in a dependency subgraph.
+    #
+    # This method traverses the dependency graph starting from the given attribute
+    # and returns all attributes that are part of its dependency chain.
+    #
+    # @param start_attribute [Symbol] the starting attribute
+    # @return [Array<Symbol>] all attributes in the dependency subgraph
+    # @note This method is kept for backward compatibility but not currently used
     def collect_dependency_subgraph(start_attribute)
       visited = Set.new
       stack = [start_attribute]
@@ -108,14 +141,17 @@ module LazyInit
       visited.to_a
     end
 
-    # Smart invalidation of cached orders
-    # Only invalidate orders that actually depend on the changed attribute
+    # Invalidates cached resolution orders that depend on the changed attribute.
+    #
+    # When an attribute's dependencies change, this method finds all other attributes
+    # that might be affected and recomputes their resolution orders.
+    #
+    # @param changed_attribute [Symbol] the attribute whose dependencies changed
+    # @return [void]
     def invalidate_dependent_orders(changed_attribute)
-      # Find all attributes that transitively depend on the changed one
       @resolution_orders.each do |attribute, order|
         if order.include?(changed_attribute)
           @resolution_orders.delete(attribute)
-          # Recompute immediately to maintain consistency
           @resolution_orders[attribute] = compute_resolution_order(attribute)
         end
       end
