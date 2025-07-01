@@ -71,9 +71,23 @@ module LazyInit
       resolution_order = @resolution_orders[attribute]
       return unless resolution_order
 
-      resolution_order.each do |dep|
-        next if instance_computed?(instance, dep)
-        instance.send(dep)
+      # Add runtime circular dependency protection
+      resolution_stack = Thread.current[:lazy_init_resolution_stack] ||= []
+      
+      if resolution_stack.include?(attribute)
+        raise LazyInit::DependencyError, "Circular dependency detected: #{resolution_stack.join(' -> ')} -> #{attribute}"
+      end
+      
+      resolution_stack.push(attribute)
+      
+      begin
+        resolution_order.each do |dep|
+          next if instance_computed?(instance, dep)
+          instance.send(dep)
+        end
+      ensure
+        resolution_stack.pop
+        Thread.current[:lazy_init_resolution_stack] = nil if resolution_stack.empty?
       end
     end
 
@@ -149,11 +163,18 @@ module LazyInit
     # @param changed_attribute [Symbol] the attribute whose dependencies changed
     # @return [void]
     def invalidate_dependent_orders(changed_attribute)
+      # FIXED: Create a copy of the hash to avoid modification during iteration
+      orders_to_update = {}
+      
       @resolution_orders.each do |attribute, order|
         if order.include?(changed_attribute)
-          @resolution_orders.delete(attribute)
-          @resolution_orders[attribute] = compute_resolution_order(attribute)
+          orders_to_update[attribute] = compute_resolution_order(attribute)
         end
+      end
+      
+      # Now safely update the resolution orders
+      orders_to_update.each do |attribute, new_order|
+        @resolution_orders[attribute] = new_order
       end
     end
   end

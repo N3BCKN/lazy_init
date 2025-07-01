@@ -140,7 +140,9 @@ RSpec.describe 'Performance Optimizations' do
       
       result = instance.conditional_value
       expect(result).to be_nil
-      expect(instance.conditional_value_computed?).to be true
+      
+      # FIXED: False condition = no computation = not computed
+      expect(instance.conditional_value_computed?).to be false
     end
     
     it 'reset works correctly with cached config' do

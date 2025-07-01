@@ -1,18 +1,17 @@
 require_relative '../spec_helper'
+require 'timeout'
 
 RSpec.configure do |config|
   # Tag stress tests for selective running
   config.filter_run_excluding :stress unless ENV['RUN_STRESS_TESTS']
 
-  # Longer timeout for stress tests
   config.around(:each, :stress) do |example|
-    original_timeout = RSpec.configuration.timeout
-    RSpec.configuration.timeout = 300 # 5 minutes
-
     begin
-      example.run
-    ensure
-      RSpec.configuration.timeout = original_timeout
+      Timeout::timeout(300) do  # 5 minutes
+        example.run
+      end
+    rescue Timeout::Error
+      fail "Stress test timed out after 5 minutes"
     end
   end
 
