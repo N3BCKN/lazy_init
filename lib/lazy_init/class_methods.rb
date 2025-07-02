@@ -9,7 +9,7 @@ module LazyInit
   # @example Basic usage
   #   class MyService
   #     extend LazyInit
-  #     
+  #
   #     lazy_attr_reader :database_connection do
   #       Database.connect(ENV['DATABASE_URL'])
   #     end
@@ -56,7 +56,7 @@ module LazyInit
     #   lazy_attr_reader :config do
     #     load_configuration
     #   end
-    #   
+    #
     #   lazy_attr_reader :database, depends_on: [:config] do
     #     Database.connect(config.database_url)
     #   end
@@ -70,28 +70,25 @@ module LazyInit
     # - `#{name}` - returns the computed value
     # - `#{name}_computed?` - returns true if value has been computed
     # - `reset_#{name}!` - resets the attribute to uncomputed state
-    def lazy_attr_reader(name, timeout: nil, depends_on: nil, if_condition: nil, &block)
+    def lazy_attr_reader(name, timeout: nil, depends_on: nil, &block)
       validate_attribute_name!(name)
       raise ArgumentError, 'Block is required' unless block
 
-      config = { 
-        block: block, 
+      config = {
+        block: block,
         timeout: timeout || LazyInit.configuration.default_timeout,
-        depends_on: depends_on,
-        condition: if_condition
+        depends_on: depends_on
       }
       lazy_initializers[name] = config
 
-      if depends_on
-        dependency_resolver.add_dependency(name, depends_on)
-      end
+      dependency_resolver.add_dependency(name, depends_on) if depends_on
 
-      if simple_case?(timeout, depends_on, if_condition)
+      if simple_case?(timeout, depends_on)
         generate_simple_inline_method(name, block)
       else
         generate_complex_lazyvalue_method(name, config)
       end
-      
+
       generate_predicate_method(name)
       generate_reset_method(name)
     end
@@ -116,7 +113,7 @@ module LazyInit
     #   end
     #
     # @example With timeout and condition
-    #   lazy_class_variable :redis_client, 
+    #   lazy_class_variable :redis_client,
     #     timeout: 10,
     #     if_condition: -> { ENV['REDIS_ENABLED'] == 'true' } do
     #     Redis.new(url: ENV['REDIS_URL'])
@@ -125,39 +122,28 @@ module LazyInit
     # Generated methods:
     # - Class methods: `ClassName.#{name}`, `ClassName.#{name}_computed?`, `ClassName.reset_#{name}!`
     # - Instance methods: `#{name}`, `#{name}_computed?`, `reset_#{name}!` (delegates to class methods)
-    def lazy_class_variable(name, timeout: nil, depends_on: nil, if_condition: nil, &block)
+    def lazy_class_variable(name, timeout: nil, depends_on: nil, &block)
       validate_attribute_name!(name)
       raise ArgumentError, 'Block is required' unless block
 
       class_variable_name = "@@#{name}_lazy_value"
 
-      if depends_on
-        dependency_resolver.add_dependency(name, depends_on)
-      end
+      dependency_resolver.add_dependency(name, depends_on) if depends_on
 
       cached_timeout = timeout
       cached_depends_on = depends_on
-      cached_condition = if_condition
       cached_block = block
 
       define_singleton_method(name) do
         @lazy_init_class_mutex.synchronize do
-          if class_variable_defined?(class_variable_name)
-            return class_variable_get(class_variable_name).value
-          end
-          
-          if cached_condition
-            condition_result = cached_condition.call
-            unless condition_result
-              nil_lazy_value = LazyValue.new { nil }
-              nil_lazy_value.value
-              class_variable_set(class_variable_name, nil_lazy_value)
-              return nil
-            end
-          end
+          return class_variable_get(class_variable_name).value if class_variable_defined?(class_variable_name)
 
           if cached_depends_on
-            temp_instance = new rescue Object.new.tap { |obj| obj.extend(self) }
+            temp_instance = begin
+              new
+            rescue StandardError
+              Object.new.tap { |obj| obj.extend(self) }
+            end
             dependency_resolver.resolve_dependencies(name, temp_instance)
           end
 
@@ -212,8 +198,8 @@ module LazyInit
     # @param depends_on [Object] dependency configuration
     # @param if_condition [Object] condition configuration
     # @return [Boolean] true if simple implementation can be used
-    def simple_case?(timeout, depends_on, if_condition)
-      timeout.nil? && (depends_on.nil? || depends_on.empty?) && if_condition.nil?
+    def simple_case?(timeout, depends_on)
+      timeout.nil? && (depends_on.nil? || depends_on.empty?)
     end
 
     # Generates an optimized inline method for simple attributes.
@@ -225,7 +211,7 @@ module LazyInit
       computed_var = "@#{name}_computed"
       value_var = "@#{name}_value"
       exception_var = "@#{name}_exception"
-      
+
       cached_block = block
 
       define_method(name) do
@@ -241,12 +227,13 @@ module LazyInit
           if instance_variable_get(computed_var)
             stored_exception = instance_variable_get(exception_var)
             raise stored_exception if stored_exception
+
             return instance_variable_get(value_var)
           end
 
           begin
             result = instance_eval(&cached_block)
-            
+
             instance_variable_set(value_var, result)
             instance_variable_set(computed_var, true)
             result
@@ -267,29 +254,21 @@ module LazyInit
     def generate_complex_lazyvalue_method(name, config)
       cached_timeout = config[:timeout]
       cached_depends_on = config[:depends_on]
-      cached_condition = config[:condition]
       cached_block = config[:block]
 
       define_method(name) do
-        if cached_condition
-          condition_result = instance_exec(&cached_condition)
-          return nil unless condition_result
-        end
-
-        if cached_depends_on
-          self.class.dependency_resolver.resolve_dependencies(name, self)
-        end
+        self.class.dependency_resolver.resolve_dependencies(name, self) if cached_depends_on
 
         ivar_name = "@#{name}_lazy_value"
         lazy_value = instance_variable_get(ivar_name) if instance_variable_defined?(ivar_name)
-        
+
         unless lazy_value
           lazy_value = LazyValue.new(timeout: cached_timeout) do
             instance_eval(&cached_block)
           end
           instance_variable_set(ivar_name, lazy_value)
         end
-        
+
         lazy_value.value
       end
     end
@@ -307,14 +286,14 @@ module LazyInit
           exception = instance_variable_get("@#{name}_exception") if instance_variable_defined?("@#{name}_exception")
           return computed && !exception
         end
-        
+
         # SLOW PATH: Check LazyValue wrapper (only during initial phase)
         lazy_var = "@#{name}_lazy_value"
         if instance_variable_defined?(lazy_var)
           lazy_value = instance_variable_get(lazy_var)
           return lazy_value&.computed? || false
         end
-        
+
         # NOT COMPUTED: No variables set yet
         false
       end
@@ -329,7 +308,7 @@ module LazyInit
         computed_var = "@#{name}_computed"
         value_var = "@#{name}_value"
         exception_var = "@#{name}_exception"
-        
+
         if instance_variable_defined?(computed_var)
           mutex = self.class.instance_variable_get(:@lazy_init_simple_mutex)
           if mutex
@@ -345,7 +324,7 @@ module LazyInit
           end
           return
         end
-        
+
         lazy_var = "@#{name}_lazy_value"
         if instance_variable_defined?(lazy_var)
           lazy_value = instance_variable_get(lazy_var)
@@ -363,10 +342,17 @@ module LazyInit
     def validate_attribute_name!(name)
       raise InvalidAttributeNameError, 'Attribute name cannot be nil' if name.nil?
       raise InvalidAttributeNameError, 'Attribute name cannot be empty' if name.to_s.strip.empty?
-      raise InvalidAttributeNameError, 'Attribute name must be a symbol or string' unless name.is_a?(Symbol) || name.is_a?(String)
-      
+
+      unless name.is_a?(Symbol) || name.is_a?(String)
+        raise InvalidAttributeNameError,
+              'Attribute name must be a symbol or string'
+      end
+
       name_str = name.to_s
-      raise InvalidAttributeNameError, "Invalid attribute name: #{name_str}" unless name_str.match?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/)
+      return if name_str.match?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/)
+
+      raise InvalidAttributeNameError,
+            "Invalid attribute name: #{name_str}"
     end
   end
 end
