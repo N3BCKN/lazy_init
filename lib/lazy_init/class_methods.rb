@@ -300,19 +300,22 @@ module LazyInit
     # @return [void]
     def generate_predicate_method(name)
       define_method("#{name}_computed?") do
+        # FAST PATH: Check simple inline variables first (most common after init)
         computed_var = "@#{name}_computed"
-        exception_var = "@#{name}_exception"
-        
         if instance_variable_defined?(computed_var)
-          return instance_variable_get(computed_var) && !instance_variable_get(exception_var)
+          computed = instance_variable_get(computed_var)
+          exception = instance_variable_get("@#{name}_exception") if instance_variable_defined?("@#{name}_exception")
+          return computed && !exception
         end
         
+        # SLOW PATH: Check LazyValue wrapper (only during initial phase)
         lazy_var = "@#{name}_lazy_value"
         if instance_variable_defined?(lazy_var)
           lazy_value = instance_variable_get(lazy_var)
           return lazy_value&.computed? || false
         end
         
+        # NOT COMPUTED: No variables set yet
         false
       end
     end
