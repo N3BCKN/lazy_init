@@ -39,6 +39,10 @@ module LazyInit
   module ClassMethods
     # Set up necessary infrastructure when LazyInit is extended by a class.
     #
+    # This is an internal Ruby hook method that's automatically called when a class
+    # extends LazyInit. Users should never call this method directly - it's part of
+    # Ruby's module extension mechanism.
+    #
     # Initializes thread-safe mutex and dependency resolver for the target class.
     # This ensures each class has its own isolated dependency management.
     #

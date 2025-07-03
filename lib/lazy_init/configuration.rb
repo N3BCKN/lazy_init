@@ -13,16 +13,17 @@ module LazyInit
   #
   # @since 0.1.0
   class Configuration
-    # @!attribute [rw] default_timeout
-    #   @return [Numeric, nil] default timeout in seconds for all lazy attributes (default: nil)
+    # Default timeout in seconds for all lazy attributes
+    # @return [Numeric, nil] timeout value (default: nil)
+    attr_accessor :default_timeout
 
-    # @!attribute [rw] max_lazy_once_entries
-    #   @return [Integer] maximum entries in lazy_once cache (default: 1000)
+    # Maximum entries in lazy_once cache
+    # @return [Integer] maximum cache entries (default: 1000)
+    attr_accessor :max_lazy_once_entries
 
-    # @!attribute [rw] lazy_once_ttl
-    #   @return [Numeric, nil] time-to-live for lazy_once entries in seconds (default: nil)
-
-    attr_accessor :default_timeout, :max_lazy_once_entries, :lazy_once_ttl
+    # Time-to-live for lazy_once entries in seconds
+    # @return [Numeric, nil] TTL value (default: nil)
+    attr_accessor :lazy_once_ttl
 
     # Initializes configuration with default values.
     def initialize
