@@ -9,10 +9,30 @@ task default: %i[spec rubocop]
 
 desc 'Run performance benchmarks'
 task :benchmark do
-  ruby 'benchmarks/performance_comparison.rb'
+  ruby 'examples/benchmark.rb'
+end
+
+desc 'Run thread safe investigator'
+task :threads do
+  ruby 'examples/thread_safety_verification.rb'
 end
 
 desc 'Generate YARD documentation'
 task :doc do
   system 'yard doc'
+end
+
+desc 'Main integration tests'
+task :rspec do
+  system 'rspec'
+end
+
+desc 'Run specific stress tests'
+task :stress do
+  system 'RUN_STRESS_TESTS=1 rspec spec/stress'
+end
+
+desc 'Run specific stress tests'
+task :rubocop do
+  system 'rubocop -a'
 end
