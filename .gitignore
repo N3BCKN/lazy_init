@@ -12,7 +12,6 @@
 /.yardoc/
 /_yardoc/
 /doc/
-/examples/
 /.bundle/
 /vendor/bundle
 /lib/bundler/man/
