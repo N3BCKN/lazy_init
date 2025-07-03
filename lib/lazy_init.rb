@@ -7,8 +7,6 @@ require_relative 'lazy_init/instance_methods'
 require_relative 'lazy_init/errors'
 require_relative 'lazy_init/configuration'
 require_relative 'lazy_init/dependency_resolver'
-require_relative 'lazy_init/complex_dependencies_debugger'
-require_relative 'lazy_init/method_call_debugger'
 
 # Thread-safe lazy initialization patterns for Ruby
 #

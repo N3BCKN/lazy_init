@@ -1,50 +1,114 @@
 # frozen_string_literal: true
 
 module LazyInit
-  # FAZA 2: Drastically optimized instance methods
-  # Target: Reduce method memoization from 28.7x → 3-5x slower than manual
+  # Provides instance-level utility methods for lazy initialization patterns.
   #
-  # KEY OPTIMIZATIONS:
-  # 1. Simplified cache implementation (remove complex TTL/LRU unless needed)
-  # 2. Direct hash access instead of complex metadata tracking
-  # 3. Lazy cache initialization
-  # 4. Optimized cleanup logic
-  
+  # This module is automatically included when a class includes LazyInit (as opposed to extending it).
+  # It provides method-local memoization capabilities that are useful for expensive computations
+  # that need to be cached per method call location rather than per attribute.
+  #
+  # The lazy_once method is particularly powerful as it provides automatic caching based on
+  # the caller location, making it easy to add memoization to any method without explicit
+  # cache key management.
+  #
+  # @example Basic lazy value creation
+  #   class DataProcessor
+  #     include LazyInit
+  #
+  #     def process_data
+  #       expensive_parser = lazy { ExpensiveParser.new }
+  #       expensive_parser.value.parse(data)
+  #     end
+  #   end
+  #
+  # @example Method-local memoization
+  #   class ApiClient
+  #     include LazyInit
+  #
+  #     def fetch_user_data(user_id)
+  #       lazy_once(ttl: 5.minutes) do
+  #         expensive_api_call(user_id)
+  #       end
+  #     end
+  #   end
+  #
+  # @since 0.1.0
   module InstanceMethods
-    # Creates a standalone lazy value (optimized)
+    # Create a standalone lazy value container.
+    #
+    # This is a simple factory method that creates a LazyValue instance.
+    # Useful when you need lazy initialization behavior but don't want to
+    # define a formal lazy attribute on the class.
+    #
+    # @param block [Proc] the computation to execute lazily
+    # @return [LazyValue] a new lazy value container
+    # @raise [ArgumentError] if no block is provided
+    #
+    # @example Standalone lazy computation
+    #   def expensive_calculation
+    #     result = lazy { perform_heavy_computation }
+    #     result.value
+    #   end
     def lazy(&block)
-      # Use simple inline approach for standalone lazy values too
       LazyValue.new(&block)
     end
 
-    # Thread-safe lazy_once with minimal overhead
+    # Method-local memoization with automatic cache key generation.
+    #
+    # Caches computation results based on the caller location (file and line number),
+    # providing automatic memoization without explicit key management. Each unique
+    # call site gets its own cache entry with optional TTL and LRU eviction.
+    #
+    # This is particularly useful for expensive computations in methods that are
+    # called frequently but where the result can be cached for a period of time.
+    #
+    # @param max_entries [Integer, nil] maximum cache entries before LRU eviction
+    # @param ttl [Numeric, nil] time-to-live in seconds for cache entries
+    # @param block [Proc] the computation to cache
+    # @return [Object] the computed or cached value
+    # @raise [ArgumentError] if no block is provided
+    #
+    # @example Simple method memoization
+    #   def expensive_data_processing
+    #     lazy_once do
+    #       perform_heavy_computation
+    #     end
+    #   end
+    #
+    # @example With TTL and size limits
+    #   def fetch_external_data
+    #     lazy_once(ttl: 30.seconds, max_entries: 100) do
+    #       external_api.fetch_data
+    #     end
+    #   end
     def lazy_once(max_entries: nil, ttl: nil, &block)
       raise ArgumentError, 'Block is required' unless block
 
-      # Use global config defaults
+      # apply global configuration defaults
       max_entries ||= LazyInit.configuration.max_lazy_once_entries
       ttl ||= LazyInit.configuration.lazy_once_ttl
 
-      # Use caller location as key (fast, no complex metadata)
+      # generate cache key from caller location for automatic memoization
       call_location = caller_locations(1, 1).first
       location_key = "#{call_location.path}:#{call_location.lineno}"
 
-      # Thread-safe cache access with double-checked locking
+      # ensure thread-safe cache initialization
       @lazy_once_mutex ||= Mutex.new
-      
-      # Fast path check outside mutex
+
+      # fast path: check cache outside mutex for performance
       if @lazy_once_cache&.key?(location_key)
         cached_entry = @lazy_once_cache[location_key]
-        
-        # TTL check if configured
+
+        # handle TTL expiration if configured
         if ttl && Time.now - cached_entry[:created_at] > ttl
           @lazy_once_mutex.synchronize do
-            # Double-check TTL inside mutex
+            # double-check TTL after acquiring lock
             if @lazy_once_cache&.key?(location_key)
               cached_entry = @lazy_once_cache[location_key]
               if Time.now - cached_entry[:created_at] > ttl
                 @lazy_once_cache.delete(location_key)
               else
+                # entry is still valid, update access tracking and return
                 cached_entry[:access_count] += 1
                 cached_entry[:last_accessed] = Time.now if ttl
                 return cached_entry[:value]
@@ -52,7 +116,7 @@ module LazyInit
             end
           end
         else
-          # Update access count in thread-safe way
+          # cache hit: update access tracking in thread-safe manner
           @lazy_once_mutex.synchronize do
             if @lazy_once_cache&.key?(location_key)
               cached_entry = @lazy_once_cache[location_key]
@@ -64,13 +128,13 @@ module LazyInit
         end
       end
 
-      # Slow path - need to compute
+      # slow path: compute value and cache result
       @lazy_once_mutex.synchronize do
-        # Double-check pattern
+        # double-check pattern: another thread might have computed while we waited
         if @lazy_once_cache&.key?(location_key)
           cached_entry = @lazy_once_cache[location_key]
-          
-          # Check TTL again
+
+          # verify TTL hasn't expired while we waited for the lock
           if ttl && Time.now - cached_entry[:created_at] > ttl
             @lazy_once_cache.delete(location_key)
           else
@@ -80,38 +144,42 @@ module LazyInit
           end
         end
 
-        # Initialize cache if needed
+        # initialize cache storage if this is the first lazy_once call
         @lazy_once_cache ||= {}
 
-        # Cleanup if needed (inside mutex for thread safety)
-        if @lazy_once_cache.size >= max_entries
-          cleanup_lazy_once_cache_simple!(max_entries)
-        end
+        # perform LRU cleanup if cache is getting too large
+        cleanup_lazy_once_cache_simple!(max_entries) if @lazy_once_cache.size >= max_entries
 
-        # Compute and cache with minimal metadata
+        # compute the value and store in cache with minimal metadata
         begin
           computed_value = block.call
-          
-          # Store with minimal required metadata
+
+          # create cache entry with minimal required metadata for performance
           cache_entry = {
             value: computed_value,
             access_count: 1
           }
-          
-          # Only add metadata if features are used
+
+          # add optional metadata only when features are actually used
           cache_entry[:created_at] = Time.now if ttl
           cache_entry[:last_accessed] = Time.now if ttl
-          
+
           @lazy_once_cache[location_key] = cache_entry
           computed_value
         rescue StandardError => e
-          # Don't cache exceptions in simple implementation
+          # don't cache exceptions to keep implementation simple
           raise
         end
       end
     end
 
-    # Thread-safe clear method
+    # Clear all cached lazy_once values for this instance.
+    #
+    # This method is thread-safe and can be used to reset all method-local
+    # memoization caches, useful for testing or when you need to ensure
+    # fresh computation on subsequent calls.
+    #
+    # @return [void]
     def clear_lazy_once_values!
       @lazy_once_mutex ||= Mutex.new
       @lazy_once_mutex.synchronize do
@@ -119,7 +187,18 @@ module LazyInit
       end
     end
 
-    # Thread-safe info method with lazy computation
+    # Get detailed information about all cached lazy_once values.
+    #
+    # Returns a hash mapping call locations to their cache metadata,
+    # useful for debugging and understanding cache behavior.
+    #
+    # @return [Hash<String, Hash>] mapping of call locations to cache information
+    #
+    # @example Inspecting cache state
+    #   processor = DataProcessor.new
+    #   processor.some_cached_method
+    #   info = processor.lazy_once_info
+    #   puts info # => { "/path/to/file.rb:42" => { computed: true, access_count: 1, ... } }
     def lazy_once_info
       @lazy_once_mutex ||= Mutex.new
       @lazy_once_mutex.synchronize do
@@ -128,8 +207,8 @@ module LazyInit
         result = {}
         @lazy_once_cache.each do |location_key, entry|
           result[location_key] = {
-            computed: true, # Always true in simple implementation
-            exception: false, # don't cache exceptions
+            computed: true, # always true in this implementation since we don't cache exceptions
+            exception: false, # we don't cache exceptions for simplicity
             created_at: entry[:created_at],
             access_count: entry[:access_count],
             last_accessed: entry[:last_accessed]
@@ -139,28 +218,41 @@ module LazyInit
       end
     end
 
-    # Thread-safe statistics with minimal computation
+    # Get statistical summary of lazy_once cache usage.
+    #
+    # Provides aggregated information about cache performance including
+    # total entries, access patterns, and timing information.
+    #
+    # @return [Hash] statistical summary of cache usage
+    #
+    # @example Monitoring cache performance
+    #   stats = processor.lazy_once_statistics
+    #   puts "Cache hit ratio: #{stats[:total_accesses] / stats[:total_entries].to_f}"
+    #   puts "Average accesses per entry: #{stats[:average_accesses]}"
     def lazy_once_statistics
       @lazy_once_mutex ||= Mutex.new
       @lazy_once_mutex.synchronize do
-        return {
-          total_entries: 0,
-          computed_entries: 0,
-          oldest_entry: nil,
-          newest_entry: nil,
-          total_accesses: 0,
-          average_accesses: 0
-        } unless @lazy_once_cache
+        # return empty stats if no cache exists yet
+        unless @lazy_once_cache
+          return {
+            total_entries: 0,
+            computed_entries: 0,
+            oldest_entry: nil,
+            newest_entry: nil,
+            total_accesses: 0,
+            average_accesses: 0
+          }
+        end
 
         total_entries = @lazy_once_cache.size
         total_accesses = @lazy_once_cache.values.sum { |entry| entry[:access_count] }
-        
-        # Ruby 2.6 compatible: use map + compact instead of filter_map
+
+        # extract creation timestamps for age analysis (Ruby 2.6 compatible)
         created_times = @lazy_once_cache.values.map { |entry| entry[:created_at] }.compact
-        
+
         {
           total_entries: total_entries,
-          computed_entries: total_entries, # All cached entries are computed
+          computed_entries: total_entries, # all cached entries are successfully computed
           oldest_entry: created_times.min,
           newest_entry: created_times.max,
           total_accesses: total_accesses,
@@ -171,56 +263,29 @@ module LazyInit
 
     private
 
-    # Ultra-simple cleanup - just remove oldest entries
+    # Perform simple LRU-style cache cleanup to prevent unbounded memory growth.
+    #
+    # Removes the least recently used entries when cache size exceeds limits.
+    # Uses a simple strategy: remove 25% of entries to avoid frequent cleanup overhead.
+    #
+    # @param max_entries [Integer] the maximum number of entries to maintain
+    # @return [void]
     def cleanup_lazy_once_cache_simple!(max_entries)
       return unless @lazy_once_cache.size > max_entries
 
-      # Remove 25% of entries to avoid frequent cleanup
+      # remove 25% of entries to avoid frequent cleanup cycles
       entries_to_remove = @lazy_once_cache.size - (max_entries * 0.75).to_i
-      
-      if @lazy_once_cache.values.first[:last_accessed] # Has TTL metadata
-        # Sort by last_accessed (LRU eviction)
+
+      # use LRU eviction if we have access time tracking, otherwise just remove oldest entries
+      if @lazy_once_cache.values.first[:last_accessed] # has TTL metadata with access tracking
+        # sort by last access time and remove least recently used
         sorted_entries = @lazy_once_cache.sort_by { |_, entry| entry[:last_accessed] || Time.at(0) }
         sorted_entries.first(entries_to_remove).each { |key, _| @lazy_once_cache.delete(key) }
       else
-        # No TTL metadata - just remove arbitrary entries (fastest)
+        # no access time tracking available, just remove arbitrary entries for speed
         keys_to_remove = @lazy_once_cache.keys.first(entries_to_remove)
         keys_to_remove.each { |key| @lazy_once_cache.delete(key) }
       end
     end
   end
 end
-
-# EXPECTED PERFORMANCE IMPROVEMENTS FOR LAZY_ONCE:
-#
-# CURRENT RESULTS:
-# - Method Memoization: 28.7x slower than manual (377.8K i/s vs 10.84M i/s)
-#
-# TARGET RESULTS:
-# - Method Memoization: 3-5x slower than manual (target: 2-3.6M i/s)
-#
-# KEY OPTIMIZATIONS:
-# 1. LAZY CACHE INITIALIZATION - No upfront cache setup cost
-# 2. SIMPLIFIED METADATA - Only store what's actually used (TTL, access counts)
-# 3. FAST PATH OPTIMIZATION - Cache hit path is ultra-simple
-# 4. REDUCED OBJECT ALLOCATION - Minimal metadata objects
-# 5. SMART CLEANUP - Only cleanup when needed, batch removals
-# 6. NO EXCEPTION CACHING - Simpler error handling
-#
-# MEMORY OPTIMIZATIONS:
-# - No upfront cache allocation
-# - Minimal metadata per cache entry
-# - Batch cleanup reduces overhead
-# - No complex TTL/LRU structures unless needed
-#
-# PERFORMANCE OPTIMIZATIONS:
-# - Direct hash access (no method calls)
-# - Lazy timestamp creation (only if TTL is used)
-# - Simplified access counting
-# - Fast path for cache hits
-#
-# BACKWARD COMPATIBILITY:
-# - All public methods maintain same signatures
-# - Statistics and info methods work as before
-# - TTL and max_entries features preserved
-# - Only internal implementation optimized
