@@ -21,10 +21,10 @@ require_relative 'lazy_init/method_call_debugger'
 #     end
 #   end
 #
-# @example Class-level shared resources  
+# @example Class-level shared resources
 #   class DatabaseManager
 #     extend LazyInit
-#     
+#
 #     lazy_class_variable :connection_pool do
 #       ConnectionPool.new(size: 20)
 #     end
@@ -42,7 +42,7 @@ module LazyInit
   # Called when LazyInit is extended by a class
   # Adds only class methods
   #
-  # @param base [Class] the class extending this module  
+  # @param base [Class] the class extending this module
   def self.extended(base)
     base.extend(ClassMethods)
   end
