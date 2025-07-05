@@ -1,0 +1,7 @@
+--markup markdown
+--readme README.md
+--title "LazyInit - Thread-safe Lazy Initialization"
+--output-dir doc
+lib/**/*.rb
+- CHANGELOG.md
+- LICENSE

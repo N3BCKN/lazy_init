@@ -4,7 +4,7 @@ Thread-safe lazy initialization patterns for Ruby with automatic dependency reso
 
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%202.6-red.svg)](https://www.ruby-lang.org/)
 [![Gem Version](https://badge.fury.io/rb/lazy_init.svg)](https://badge.fury.io/rb/lazy_init)
-[![Build Status](https://github.com/N3BCKN/lazy_init/workflows/CI/badge.svg)](https://github.com/N3BCKN/lazy_init/actions)
+[![Downloads](https://img.shields.io/gem/dt/lazy_init.svg)](https://rubygems.org/gems/lazy_init)
 
 ## Table of Contents
 
@@ -164,20 +164,20 @@ lazy_attr_reader(name, **options, &block)
 Defines a thread-safe lazy-initialized attribute.
 #### Parameters:
 
-- name (Symbol/String): Attribute name
-- timeout (Numeric, optional): Timeout in seconds for computation
-- depends_on (Array<Symbol>/Symbol, optional): Dependencies to resolve first
-- block (Proc): Computation block
+- `name` (Symbol/String): Attribute name
+- `timeout` (Numeric, optional): Timeout in seconds for computation
+- `depends_on` (Array<Symbol>/Symbol, optional): Dependencies to resolve first
+- `block` (Proc): Computation block
 
 #### Generated Methods:
 
-- #{name}: Returns the computed value
-- #{name}_computed?: Returns true if value has been computed
-- reset_#{name}!: Resets to uncomputed state
+- `#{name}`: Returns computed value
+- `#{name}_computed?`: Returns true if value has been computed
+- `reset_#{name}!`: Resets to uncomputed state
 
 #### Examples:
 ```ruby
-rubyclass ServiceManager
+class ServiceManager
   extend LazyInit
   
   # Simple lazy attribute
@@ -210,12 +210,12 @@ lazy_class_variable(name, **options, &block)
 Defines a thread-safe lazy-initialized class variable shared across all instances.
 #### Parameters:
 
- - Same as lazy_attr_reader
+ - Same as `lazy_attr_reader`
 
 #### Generated Methods:
 
-- Class-level: ClassName.#{name}, ClassName.#{name}\_computed?, ClassName.reset\_#{name}!
-- Instance-level: #{name}, #{name}\_computed?, reset\_#{name}! (delegates to class)
+- Class-level: `ClassName.#{name}`, `ClassName.#{name}\_computed?`, `ClassName.reset\_#{name}!`
+- Instance-level: `#{name}`, `#{name}\_computed?`, `reset\_#{name}!` (delegates to class)
 
 #### Example:
 ```ruby
@@ -244,7 +244,7 @@ class DataProcessor
   include LazyInit  # Note: include, not extend
 end
 ```
-**lazy(&block)**
+`lazy(&block)`
 
  Creates a standalone lazy value container.
 ```ruby
@@ -255,13 +255,13 @@ end
 ```
 
 
-__lazy_once(**options, &block)__
+`lazy_once(**options, &block)`
 
  Method-scoped lazy initialization with automatic cache key generation.
 #### Parameters:
 
-- max_entries (Integer): Maximum cache entries before LRU eviction
-- ttl (Numeric): Time-to-live in seconds for cache entries
+- `max_entries` (Integer): Maximum cache entries before LRU eviction
+- `ttl` (Numeric): Time-to-live in seconds for cache entries
 
 #### Example:
 ``` ruby
@@ -276,11 +276,11 @@ class DataAnalyzer
 end
 ```
 
-**clear_lazy_once_values!**
+`clear_lazy_once_values!`
 
 Clears all cached lazy_once values for the instance.
 
-**lazy_once_statistics**
+`lazy_once_statistics`
 
 Returns cache statistics for debugging and monitoring.
 
@@ -308,15 +308,15 @@ end
 
 #### Configuration Options:
 
-- **default_timeout**: Default timeout for all lazy attributes (default: nil)
-- **max_lazy_once_entries**: Maximum entries in lazy_once cache (default: 1000)
-- **lazy_once_ttl**: Default TTL for lazy_once entries (default: nil)
+- `default_timeout`: Default timeout for all lazy attributes (default: nil)
+- `max_lazy_once_entries`: Maximum entries in lazy_once cache (default: 1000)
+- `lazy_once_ttl`: Default TTL for lazy_once entries (default: nil)
 
 ## Advanced Usage
 ### Dependency Resolution
 #### LazyInit automatically resolves dependencies in the correct order:
 ```ruby
-rubyclass ComplexService
+class ComplexService
   extend LazyInit
   
   lazy_attr_reader :config do
@@ -534,7 +534,7 @@ Realistic benchmark results (x86_64-darwin19, Ruby 3.0.2):
 - Initial computation: ~identical (LazyInit setup overhead negligible)
 - Cached access: 3.5x slower than manual ||= 
 -100,000 calls: Manual 13ms, LazyInit 45ms
-- In practice: For expensive operations (5-50ms), the 0.0004ms per call overhead is negligible.
+- In practice: For expensive operations (5-50ms), 0.0004ms per call overhead is negligible.
 - Trade-off: 3.5x cached access cost for 100% thread safety
 
 [Full details can be found here](https://github.com/N3BCKN/lazy_init/blob/main/benchmarks/benchmark_performance.rb)
@@ -735,7 +735,7 @@ A: Minimal - about 1 mutex + 3 instance variables per lazy attribute.
 
 Q: Can I use lazy_attr_reader with private methods?
 
-A: Yes, the generated methods respect the same visibility as where they're defined.
+A: Yes, generated methods respect the same visibility as where they're defined.
 
 Q: How do I debug dependency resolution issues?
 
@@ -746,7 +746,7 @@ Q: Does this work with inheritance?
 A: Yes, lazy attributes are inherited and can be overridden in subclasses.
 ## Contributing
 
-1. Fork the repository
+1. Fork repository
 2. Create your feature branch (git checkout -b my-new-feature)
 3. Write tests for your changes
 4. Ensure all tests pass (bundle exec rspec)
@@ -762,4 +762,4 @@ bundle install
 bundle exec rspec  # Run tests
 ```
 ## License
-The gem is available as open source under the terms of the MIT License.
+Gem is available as open source under the terms of the MIT License.
