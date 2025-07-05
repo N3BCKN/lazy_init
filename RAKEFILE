@@ -36,3 +36,8 @@ desc 'Run specific stress tests'
 task :rubocop do
   system 'rubocop -a'
 end
+
+desc 'Compile gem'
+task :build do
+  system 'gem build lazy_init.gemspec'
+end
