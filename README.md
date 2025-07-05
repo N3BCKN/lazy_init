@@ -53,16 +53,16 @@ LazyInit provides thread-safe lazy initialization with zero race conditions, aut
 
 ## Installation
 Add this line to your application's Gemfile:
-```ruby
-rubygem 'lazy_init'
+```ruby 
+gem 'lazy_init'
 ```
 And then execute:
 ```ruby
-bash$ bundle install
+bundle install
 ```
 Or install it yourself as:
 ```ruby
-bash$ gem install lazy_init
+ gem install lazy_init
 ```
 ## Requirements:
 
@@ -133,6 +133,23 @@ service.api_client  # Automatically resolves: config → database → api_client
 - 5-6x overhead vs manual ||= (significantly faster than alternatives)
 - Memory-efficient with automatic cleanup
 
+```ruby
+# Simple inline (fastest)
+lazy_attr_reader :simple_value do
+  "simple"
+end
+
+# Optimized dependency (medium)
+lazy_attr_reader :dependent_value, depends_on: [:simple_value] do
+  "depends on #{simple_value}"
+end
+
+# Full LazyValue (complete features)
+lazy_attr_reader :complex_value, timeout: 5, depends_on: [:multiple, :deps] do
+  "complex computation"
+end
+```
+
 ### Memory Management
 
 - Automatic cache cleanup prevents memory leaks
@@ -197,8 +214,8 @@ Defines a thread-safe lazy-initialized class variable shared across all instance
 
 #### Generated Methods:
 
-- Class-level: ClassName.#{name}, ClassName.#{name}_computed?, ClassName.reset_#{name}!
-- Instance-level: #{name}, #{name}_computed?, reset_#{name}! (delegates to class)
+- Class-level: ClassName.#{name}, ClassName.#{name}\_computed?, ClassName.reset\_#{name}!
+- Instance-level: #{name}, #{name}\_computed?, reset\_#{name}! (delegates to class)
 
 #### Example:
 ```ruby
@@ -227,19 +244,20 @@ class DataProcessor
   include LazyInit  # Note: include, not extend
 end
 ```
-lazy(&block)
+**lazy(&block)**
 
-#### Creates a standalone lazy value container.
+ Creates a standalone lazy value container.
 ```ruby
-rubydef expensive_calculation
+def expensive_calculation
   result = lazy { perform_heavy_computation }
   result.value
 end
 ```
 
 
-lazy_once(**options, &block)
-#### Method-scoped lazy initialization with automatic cache key generation.
+__lazy_once(**options, &block)__
+
+ Method-scoped lazy initialization with automatic cache key generation.
 #### Parameters:
 
 - max_entries (Integer): Maximum cache entries before LRU eviction
@@ -258,11 +276,11 @@ class DataAnalyzer
 end
 ```
 
-clear_lazy_once_values!
+**clear_lazy_once_values!**
 
 Clears all cached lazy_once values for the instance.
 
-lazy_once_statistics
+**lazy_once_statistics**
 
 Returns cache statistics for debugging and monitoring.
 
@@ -290,9 +308,9 @@ end
 
 #### Configuration Options:
 
-- default_timeout: Default timeout for all lazy attributes (default: nil)
-- max_lazy_once_entries: Maximum entries in lazy_once cache (default: 1000)
-- lazy_once_ttl: Default TTL for lazy_once entries (default: nil)
+- **default_timeout**: Default timeout for all lazy attributes (default: nil)
+- **max_lazy_once_entries**: Maximum entries in lazy_once cache (default: 1000)
+- **lazy_once_ttl**: Default TTL for lazy_once entries (default: nil)
 
 ## Advanced Usage
 ### Dependency Resolution
@@ -509,12 +527,17 @@ LazyInit::DependencyError           # Circular dependencies
 Performance
 LazyInit is optimized for production use:
 ```
-## Performance Characteristics
+## Performance
 
-- Hot path performance: 5-6x overhead vs manual ||= after initialization
-- Cold path: Similar to manual approaches
-- Memory usage: Optimized for minimal overhead (~1 mutex + 3 instance variables per attribute)
-- Scalability: Linear performance with thread count
+Realistic benchmark results (x86_64-darwin19, Ruby 3.0.2):
+
+- Initial computation: ~identical (LazyInit setup overhead negligible)
+- Cached access: 3.5x slower than manual ||= 
+-100,000 calls: Manual 13ms, LazyInit 45ms
+- In practice: For expensive operations (5-50ms), the 0.0004ms per call overhead is negligible.
+- Trade-off: 3.5x cached access cost for 100% thread safety
+
+[Full details can be found here](https://github.com/N3BCKN/lazy_init/blob/main/benchmarks/benchmark_performance.rb)
 
 ### Optimization Strategies
 LazyInit automatically selects the best implementation:
@@ -522,46 +545,6 @@ LazyInit automatically selects the best implementation:
 - Simple inline (no dependencies, no timeout): Maximum performance
 - Optimized dependency (single dependency): Balanced performance
 - Full LazyValue (complex scenarios): Full feature set
-
-#### Benchmarking
-```ruby
-rubyrequire 'benchmark'
-
-# Manual approach
-class ManualClass
-  def value
-    @value ||= expensive_computation
-  end
-end
-
-# LazyInit approach
-class LazyClass
-  extend LazyInit
-  lazy_attr_reader :value do
-    expensive_computation
-  end
-end
-
-manual = ManualClass.new
-lazy = LazyClass.new
-
-# Warm up
-manual.value
-lazy.value
-
-Benchmark.bm(10) do |x|
-  x.report("Manual") { 100_000.times { manual.value } }
-  x.report("LazyInit") { 100_000.times { lazy.value } }
-end
-
-# Typical results (benchmarked on Ruby 3.1, MacBook Pro M1):
-#                user     system      total        real
-# Manual     0.050000   0.000000   0.050000 (  0.048837)
-# LazyInit   0.280000   0.000000   0.280000 (  0.276543)
-#
-# LazyInit is ~5.7x slower but provides thread safety and advanced features
-```
-LazyInit is 2-3x faster than most alternatives while providing more features.
 
 
 ## Thread Safety
@@ -604,20 +587,15 @@ LazyInit uses several techniques to ensure thread safety:
 - Atomic state transitions: Prevents race conditions during computation
 - Exception safety: Proper cleanup even when computations fail
 
-#### Proof of Thread Safety
-```ruby
-# This will always print the same object_id across all threads
-class SafeService
-  extend LazyInit
-  lazy_attr_reader :resource do
-    Time.now.to_f  # Different per computation, but same result
-  end
-end
+[Full report with benchmark here](https://github.com/N3BCKN/lazy_init/blob/main/benchmarks/benchmark_threads.rb)
 
-service = SafeService.new
-results = 100.times.map { Thread.new { service.resource } }.map(&:value)
-puts results.uniq.size  # => 1 (all threads get same result)
-```
+#### Thread Safety benchmark 
+- 200 concurrent requests: 0 race conditions
+- 6,000+ operations/second sustained throughput  
+- Complex dependency chains: 100% reliable
+- Zero-downtime resets: 100% success rate
+- Tested on Ruby 3.0.2, macOS (Intel)
+
 ## Compatibility
 
 - Ruby: 2.6, 2.7, 3.0, 3.1, 3.2, 3.3+
@@ -739,9 +717,9 @@ Consider alternatives in these scenarios:
 - Very simple Rails applications without complex service layers
 
 ## FAQ
-Q: How does performance compare to other gems?
+Q: How does performance compare to other approaches?
 
-A: LazyInit is 2-3x faster than most alternatives while providing more features.
+A: Compared to manual mutex-based solutions, LazyInit provides better developer experience with competitive performance. See benchmarks for detailed comparison with manual ||= patterns.
 
 Q: Can I use this in Rails initializers?
 
