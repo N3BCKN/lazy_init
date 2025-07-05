@@ -291,8 +291,8 @@ stats = processor.lazy_once_statistics
 #   computed_entries: 25,
 #   total_accesses: 150,
 #   average_accesses: 6.0,
-#   oldest_entry: 2024-01-15 10:00:00,
-#   newest_entry: 2024-01-15 10:30:00
+#   oldest_entry: 2025-07-01 10:00:00,
+#   newest_entry: 2024-07-01 10:30:00
 # }
 ```
 
