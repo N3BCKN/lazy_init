@@ -18,6 +18,7 @@ Gem::Specification.new do |spec|
   spec.metadata['source_code_uri'] = 'https://github.com/N3BCKN/lazy_init'
   spec.metadata['changelog_uri'] = 'https://github.com/N3BCKN/lazy_init/blob/main/CHANGELOG.md'
   spec.metadata['bug_tracker_uri'] = 'https://github.com/N3BCKN/lazy_init/issues'
+  spec.metadata['documentation_uri'] = 'https://rubydoc.info/gems/lazy_init'
 
   # Specify which files should be added to the gem when it is released.
   spec.files = Dir.chdir(File.expand_path(__dir__)) do
