@@ -4,7 +4,7 @@ Thread-safe lazy initialization patterns for Ruby with automatic dependency reso
 
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%202.6-red.svg)](https://www.ruby-lang.org/)
 [![Gem Version](https://badge.fury.io/rb/lazy_init.svg)](https://badge.fury.io/rb/lazy_init)
-[![Build Status](https://github.com/N3BCKN/lazy_init/workflows/CI/badge.svg)](https://github.com/N3BCKN/lazy_init/actions)
+[![Downloads](https://img.shields.io/gem/dt/lazy_init.svg)](https://rubygems.org/gems/lazy_init)
 
 ## Table of Contents
 
