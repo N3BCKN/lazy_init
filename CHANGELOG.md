@@ -1,4 +1,6 @@
+### 0.1.2 (2025/11/07)
 
+* Fix bug with missing yard documentation link
 
 ### 0.1.1 (2025/06/07)
 

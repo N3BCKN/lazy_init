@@ -18,7 +18,6 @@ Gem::Specification.new do |spec|
   spec.metadata['source_code_uri'] = 'https://github.com/N3BCKN/lazy_init'
   spec.metadata['changelog_uri'] = 'https://github.com/N3BCKN/lazy_init/blob/main/CHANGELOG.md'
   spec.metadata['bug_tracker_uri'] = 'https://github.com/N3BCKN/lazy_init/issues'
-  spec.metadata['documentation_uri'] = 'https://rubydoc.info/gems/lazy_init'
 
   # Specify which files should be added to the gem when it is released.
   spec.files = Dir.chdir(File.expand_path(__dir__)) do
@@ -30,11 +29,11 @@ Gem::Specification.new do |spec|
   spec.require_paths = ['lib']
 
   spec.required_ruby_version = '>= 2.6'
-  
+
   # Development dependencies
-  spec.add_development_dependency 'rspec', '~> 3.12'
   spec.add_development_dependency 'benchmark-ips', '~> 2.10'
+  spec.add_development_dependency 'rake', '~> 13.0'
+  spec.add_development_dependency 'rspec', '~> 3.12'
   spec.add_development_dependency 'rubocop', '~> 1.50.2'
   spec.add_development_dependency 'yard', '~> 0.9'
-  spec.add_development_dependency 'rake', '~> 13.0'
 end

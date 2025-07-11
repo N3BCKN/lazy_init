@@ -9,7 +9,6 @@ class LazyInitBenchmark
 
   def initialize
     @results = {}
-    configure_lazy_init
     puts header
   end
 
@@ -28,13 +27,6 @@ class LazyInitBenchmark
   end
 
   private
-
-  def configure_lazy_init
-    LazyInit.configure do |config|
-      config.track_performance = false
-      config.debug = false
-    end
-  end
 
   def header
     <<~HEADER
@@ -196,34 +188,6 @@ class LazyInitBenchmark
       -> { lazy_complex.service }
     )
   end
-
-  # def run_conditional_loading
-  #   puts "\n" + "="*60
-  #   puts "4. CONDITIONAL LOADING PERFORMANCE"
-  #   puts "="*60
-
-  #   # Condition true
-  #   manual_true = create_manual_conditional(true)
-  #   lazy_true = create_lazy_conditional(true)
-
-  #   benchmark_comparison(
-  #     "Conditional Loading",
-  #     "Condition True",
-  #     -> { manual_true.feature },
-  #     -> { lazy_true.feature }
-  #   )
-
-  #   # Condition false
-  #   manual_false = create_manual_conditional(false)
-  #   lazy_false = create_lazy_conditional(false)
-
-  #   benchmark_comparison(
-  #     "Conditional Loading",
-  #     "Condition False",
-  #     -> { manual_false.feature },
-  #     -> { lazy_false.feature }
-  #   )
-  # end
 
   def run_class_level_shared
     puts "\n" + '=' * 60
