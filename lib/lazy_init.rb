@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'lazy_init/version'
+require_relative 'lazy_init/ruby_capabilities'
 require_relative 'lazy_init/lazy_value'
 require_relative 'lazy_init/class_methods'
 require_relative 'lazy_init/instance_methods'

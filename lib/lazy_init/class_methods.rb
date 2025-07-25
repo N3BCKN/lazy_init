@@ -1,17 +1,13 @@
 # frozen_string_literal: true
 
 module LazyInit
-  # Provides class-level methods for defining lazy attributes with various optimization strategies.
+  # Class-level methods for defining lazy attributes with Ruby version-specific optimizations.
   #
-  # This module is automatically extended when a class includes or extends LazyInit.
-  # It analyzes attribute configuration and selects the most efficient implementation:
-  # simple inline methods for basic cases, optimized dependency methods for single
-  # dependencies, and full LazyValue wrappers for complex scenarios.
-  #
-  # The module generates three methods for each lazy attribute:
-  # - `attribute_name` - the main accessor method
-  # - `attribute_name_computed?` - predicate to check computation state
-  # - `reset_attribute_name!` - method to reset and allow recomputation
+  # Automatically selects the most efficient implementation:
+  # - Ruby 3+: eval-based methods for maximum performance
+  # - Ruby 2.6+: define_method with full compatibility
+  # - Simple cases: inline variables, dependency cases: lightweight resolution
+  # - Complex cases: full LazyValue with timeout and dependency support
   #
   # @example Basic lazy attribute
   #   class ApiClient
@@ -22,52 +18,30 @@ module LazyInit
   #     end
   #   end
   #
-  # @example Lazy attribute with dependencies
-  #   class DatabaseService
-  #     extend LazyInit
-  #
-  #     lazy_attr_reader :config do
-  #       load_configuration
-  #     end
-  #
-  #     lazy_attr_reader :connection, depends_on: [:config] do
-  #       Database.connect(config.database_url)
-  #     end
+  # @example With dependencies
+  #   lazy_attr_reader :database, depends_on: [:config] do
+  #     Database.connect(config.database_url)
   #   end
   #
   # @since 0.1.0
   module ClassMethods
     # Set up necessary infrastructure when LazyInit is extended by a class.
     #
-    # This is an internal Ruby hook method that's automatically called when a class
-    # extends LazyInit. Users should never call this method directly - it's part of
-    # Ruby's module extension mechanism.
-    #
-    # Initializes thread-safe mutex and dependency resolver for the target class.
-    # This ensures each class has its own isolated dependency management.
-    #
     # @param base [Class] the class being extended with LazyInit
     # @return [void]
     # @api private
     def self.extended(base)
       base.instance_variable_set(:@lazy_init_class_mutex, Mutex.new)
-      base.instance_variable_set(:@dependency_resolver, DependencyResolver.new(base))
     end
 
-    # Access the registry of all lazy initializers defined on this class.
-    #
-    # Used internally for introspection and debugging. Each entry contains
-    # the configuration (block, timeout, dependencies) for a lazy attribute.
+    # Registry of all lazy initializers defined on this class.
     #
     # @return [Hash<Symbol, Hash>] mapping of attribute names to their configuration
     def lazy_initializers
       @lazy_initializers ||= {}
     end
 
-    # Access the dependency resolver for this class.
-    #
-    # Handles dependency graph management and resolution order computation.
-    # Creates a new resolver if one doesn't exist.
+    # Lazy dependency resolver - created only when needed for performance.
     #
     # @return [DependencyResolver] the resolver instance for this class
     def dependency_resolver
@@ -76,10 +50,11 @@ module LazyInit
 
     # Define a thread-safe lazy-initialized instance attribute.
     #
-    # The attribute will be computed only once per instance when first accessed.
-    # Subsequent calls return the cached value. The implementation is automatically
-    # optimized based on complexity: simple cases use inline variables, single
-    # dependencies use optimized resolution, complex cases use full LazyValue.
+    # Automatically optimizes based on Ruby version and complexity:
+    # - Ruby 3+: uses eval for maximum performance
+    # - Simple cases: direct instance variables
+    # - Dependencies: lightweight resolution for single deps, full resolver for complex
+    # - Timeouts: full LazyValue wrapper
     #
     # @param name [Symbol, String] the attribute name
     # @param timeout [Numeric, nil] timeout in seconds for the computation
@@ -107,7 +82,7 @@ module LazyInit
       validate_attribute_name!(name)
       raise ArgumentError, 'Block is required' unless block
 
-      # store configuration for introspection and debugging
+      # store configuration for introspection
       config = {
         block: block,
         timeout: timeout || LazyInit.configuration.default_timeout,
@@ -118,27 +93,36 @@ module LazyInit
       # register dependencies with resolver if present
       dependency_resolver.add_dependency(name, depends_on) if depends_on
 
-      # select optimal implementation strategy based on complexity
-      if enhanced_simple_case?(timeout, depends_on)
+      # select optimal implementation strategy
+      if depends_on && Array(depends_on).size == 1 && !timeout
+        generate_simple_dependency_with_inline_check(name, Array(depends_on).first, block)
+        generate_predicate_method(name)
+        generate_reset_method(name)
+      elsif depends_on && Array(depends_on).size > 1 && !timeout
+        generate_fast_dependency_method(name, depends_on, block, config)
+        generate_predicate_method(name)
+        generate_reset_method_with_deps_flag(name)
+      elsif simple_case_eligible?(timeout, depends_on)
+        generate_optimized_simple_method(name, block)
+      elsif enhanced_simple_case?(timeout, depends_on)
         if simple_dependency_case?(depends_on)
-          generate_simple_dependency_method(name, depends_on, block)
+          generate_lazy_compiling_method(name, block, :dependency, depends_on)
         else
-          generate_simple_inline_method(name, block)
+          generate_lazy_compiling_method(name, block, :simple, nil)
         end
+        generate_predicate_method(name)
+        generate_reset_method(name)
       else
         generate_complex_lazyvalue_method(name, config)
+        generate_predicate_method(name)
+        generate_reset_method(name)
       end
-
-      # generate helper methods for all implementation types
-      generate_predicate_method(name)
-      generate_reset_method(name)
     end
 
     # Define a thread-safe lazy-initialized class variable shared across all instances.
     #
-    # The variable will be computed only once per class when first accessed.
-    # All instances share the same computed value. Class variables are always
-    # implemented using LazyValue for full thread safety and feature support.
+    # Uses full LazyValue wrapper for thread safety and feature completeness.
+    # All instances share the same computed value.
     #
     # @param name [Symbol, String] the class variable name
     # @param timeout [Numeric, nil] timeout in seconds for the computation
@@ -158,7 +142,7 @@ module LazyInit
 
       class_variable_name = "@@#{name}_lazy_value"
 
-      # register dependencies for class-level attributes too
+      # register dependencies for class-level attributes
       dependency_resolver.add_dependency(name, depends_on) if depends_on
 
       # cache configuration for use in generated methods
@@ -215,20 +199,43 @@ module LazyInit
 
     private
 
-    # Determine if an attribute qualifies for simple optimization.
+    # Generate optimized methods based on dependency type and Ruby version.
     #
-    # Simple cases avoid LazyValue overhead by using direct instance variables.
-    # This includes attributes with no timeout and either no dependencies or
-    # a single simple dependency that can be inlined.
+    # @param name [Symbol] the attribute name
+    # @param block [Proc] the computation block
+    # @param dependency_type [Symbol] :simple or :dependency
+    # @param depends_on [Array<Symbol>, Symbol, nil] dependencies for :dependency type
+    # @return [void]
+    # @api private
+    def generate_lazy_compiling_method(name, block, dependency_type = :simple, depends_on = nil)
+      case dependency_type
+      when :dependency
+        if depends_on && Array(depends_on).size == 1
+          # single dependency: fast path with lightweight resolution
+          generate_simple_dependency_with_resolution(name, depends_on, block)
+        else
+          # complex dependency: full LazyValue with complex resolution
+          config = { block: block, timeout: nil, depends_on: depends_on }
+          generate_complex_lazyvalue_method(name, config)
+        end
+      when :simple
+        # no dependencies: fastest path
+        if LazyInit::RubyCapabilities::IMPROVED_EVAL_PERFORMANCE
+          generate_simple_inline_method_with_eval(name, block)
+        else
+          generate_simple_inline_method_with_define_method(name, block)
+        end
+      end
+    end
+
+    # Check if attribute qualifies for simple optimization (no timeout, simple dependencies).
     #
     # @param timeout [Object] timeout configuration
     # @param depends_on [Object] dependency configuration
     # @return [Boolean] true if simple implementation should be used
     def enhanced_simple_case?(timeout, depends_on)
-      # timeout requires LazyValue for proper handling
       return false unless timeout.nil?
 
-      # categorize dependency complexity
       case depends_on
       when nil, []
         true # no dependencies are always simple
@@ -243,150 +250,196 @@ module LazyInit
 
     # Check if dependencies qualify for simple dependency optimization.
     #
-    # Single dependencies can use an optimized resolution strategy that
-    # avoids the full dependency resolver overhead.
-    #
     # @param depends_on [Object] dependency configuration
     # @return [Boolean] true if simple dependency method should be used
     def simple_dependency_case?(depends_on)
       return false if depends_on.nil? || depends_on.empty?
 
-      deps = Array(depends_on)
-      deps.size == 1 # any single dependency qualifies for optimization
+      Array(depends_on).size == 1
     end
 
-    # Generate an optimized method for attributes with single dependencies.
-    #
-    # This creates a method that uses inline variables for storage and
-    # optimized dependency resolution that avoids LazyValue overhead.
-    # Includes circular dependency detection and thread-safe error caching.
+    # Generate full LazyValue method for complex scenarios (timeout, multiple dependencies).
     #
     # @param name [Symbol] the attribute name
-    # @param depends_on [Array, Symbol] the single dependency
-    # @param block [Proc] the computation block
+    # @param config [Hash] the attribute configuration
     # @return [void]
-    def generate_simple_dependency_method(name, depends_on, block)
-      dep_name = Array(depends_on).first
-      computed_var = "@#{name}_computed"
-      value_var = "@#{name}_value"
-      exception_var = "@#{name}_exception"
-
-      # cache references to avoid repeated lookups in generated method
-      cached_block = block
-      cached_dep_name = dep_name
+    def generate_complex_lazyvalue_method(name, config)
+      cached_timeout = config[:timeout]
+      cached_depends_on = config[:depends_on]
+      cached_block = config[:block]
 
       define_method(name) do
-        # fast path: return cached result including cached errors
-        if instance_variable_get(computed_var)
-          stored_exception = instance_variable_get(exception_var)
-          raise stored_exception if stored_exception
+        # resolve dependencies using full dependency resolver
+        self.class.dependency_resolver.resolve_dependencies(name, self) if cached_depends_on
 
-          return instance_variable_get(value_var)
-        end
+        # lazy creation of LazyValue wrapper
+        ivar_name = "@#{name}_lazy_value"
+        lazy_value = instance_variable_get(ivar_name) if instance_variable_defined?(ivar_name)
 
-        # circular dependency protection using shared resolution stack
-        resolution_stack = Thread.current[:lazy_init_resolution_stack] ||= []
-        if resolution_stack.include?(name)
-          circular_error = LazyInit::DependencyError.new(
-            "Circular dependency detected: #{resolution_stack.join(' -> ')} -> #{name}"
-          )
-
-          # thread-safe error caching so all threads see the same error
-          mutex = self.class.instance_variable_get(:@lazy_init_simple_mutex) || Mutex.new
-          unless self.class.instance_variable_get(:@lazy_init_simple_mutex)
-            self.class.instance_variable_set(:@lazy_init_simple_mutex, mutex)
+        unless lazy_value
+          lazy_value = LazyValue.new(timeout: cached_timeout) do
+            instance_eval(&cached_block)
           end
-
-          mutex.synchronize do
-            instance_variable_set(exception_var, circular_error)
-            instance_variable_set(computed_var, true)
-          end
-
-          raise circular_error
+          instance_variable_set(ivar_name, lazy_value)
         end
 
-        # ensure we have a mutex for thread-safe computation
-        mutex = self.class.instance_variable_get(:@lazy_init_simple_mutex)
-        unless mutex
-          mutex = Mutex.new
-          self.class.instance_variable_set(:@lazy_init_simple_mutex, mutex)
+        lazy_value.value
+      end
+    end
+
+    # Generate predicate method to check computation state.
+    # Handles both simple (inline variables) and complex (LazyValue) cases.
+    #
+    # @param name [Symbol] the attribute name
+    # @return [void]
+    def generate_predicate_method(name)
+      define_method("#{name}_computed?") do
+        # check simple implementation first
+        computed_var = "@#{name}_computed"
+        exception_var = "@#{name}_exception"
+
+        if instance_variable_defined?(computed_var)
+          # simple implementation: computed but not if there's a cached exception
+          return instance_variable_get(computed_var) && !instance_variable_get(exception_var)
         end
 
-        # track this attribute in resolution stack
-        resolution_stack.push(name)
+        # check complex implementation (LazyValue wrapper)
+        lazy_var = "@#{name}_lazy_value"
+        if instance_variable_defined?(lazy_var)
+          lazy_value = instance_variable_get(lazy_var)
+          return lazy_value&.computed? || false
+        end
 
-        begin
-          mutex.synchronize do
-            # double-check pattern after acquiring lock
-            if instance_variable_get(computed_var)
-              stored_exception = instance_variable_get(exception_var)
-              raise stored_exception if stored_exception
+        false
+      end
+    end
 
-              return instance_variable_get(value_var)
+    # Generate reset method to clear computed state and allow recomputation.
+    # Handles both simple and complex implementations.
+    #
+    # @param name [Symbol] the attribute name
+    # @return [void]
+    def generate_reset_method(name)
+      define_method("reset_#{name}!") do
+        # handle simple implementation reset
+        computed_var = "@#{name}_computed"
+        value_var = "@#{name}_value"
+        exception_var = "@#{name}_exception"
+
+        if instance_variable_defined?(computed_var)
+          # use mutex if available for thread safety
+          mutex = self.class.instance_variable_get(:@lazy_init_simple_mutex)
+          if mutex
+            mutex.synchronize do
+              instance_variable_set(computed_var, false)
+              remove_instance_variable(value_var) if instance_variable_defined?(value_var)
+              remove_instance_variable(exception_var) if instance_variable_defined?(exception_var)
             end
-
-            begin
-              # ensure dependency is computed first using optimized approach
-              unless send("#{cached_dep_name}_computed?")
-                # temporarily release lock to avoid deadlocks during dependency resolution
-                mutex.unlock
-                begin
-                  send(cached_dep_name) # uses same shared resolution_stack for circular detection
-                ensure
-                  mutex.lock
-                end
-
-                # check if we got computed while lock was released
-                if instance_variable_get(computed_var)
-                  stored_exception = instance_variable_get(exception_var)
-                  raise stored_exception if stored_exception
-
-                  return instance_variable_get(value_var)
-                end
-              end
-
-              # perform the actual computation with dependency available
-              result = instance_eval(&cached_block)
-              instance_variable_set(value_var, result)
-              instance_variable_set(computed_var, true)
-              result
-            rescue StandardError => e
-              # cache exceptions for consistent behavior across threads
-              instance_variable_set(exception_var, e)
-              instance_variable_set(computed_var, true)
-              raise
-            end
+          else
+            instance_variable_set(computed_var, false)
+            remove_instance_variable(value_var) if instance_variable_defined?(value_var)
+            remove_instance_variable(exception_var) if instance_variable_defined?(exception_var)
           end
-        ensure
-          # always clean up resolution stack to prevent leaks
-          resolution_stack.pop
-          Thread.current[:lazy_init_resolution_stack] = nil if resolution_stack.empty?
+          return
+        end
+
+        # handle complex implementation reset (LazyValue)
+        lazy_var = "@#{name}_lazy_value"
+        if instance_variable_defined?(lazy_var)
+          lazy_value = instance_variable_get(lazy_var)
+          lazy_value&.reset!
+          remove_instance_variable(lazy_var)
         end
       end
     end
 
-    # Generate a simple inline method for attributes with no dependencies.
+    # Validate attribute name follows Ruby conventions.
     #
-    # Uses direct instance variables for maximum performance while maintaining
-    # thread safety through mutex synchronization. This is the fastest
-    # implementation strategy available.
-    #
-    # @param name [Symbol] the attribute name
-    # @param block [Proc] the computation block
+    # @param name [Object] the proposed attribute name
     # @return [void]
-    def generate_simple_inline_method(name, block)
+    # @raise [InvalidAttributeNameError] if the name is invalid
+    def validate_attribute_name!(name)
+      raise InvalidAttributeNameError, 'Attribute name cannot be nil' if name.nil?
+      raise InvalidAttributeNameError, 'Attribute name cannot be empty' if name.to_s.strip.empty?
+
+      unless name.is_a?(Symbol) || name.is_a?(String)
+        raise InvalidAttributeNameError, 'Attribute name must be a symbol or string'
+      end
+
+      name_str = name.to_s
+      return if name_str.match?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/)
+
+      raise InvalidAttributeNameError, "Invalid attribute name: #{name_str}"
+    end
+
+    # Ruby 3+ eval-based method generation for simple methods (no dependencies).
+    # Optimized for maximum performance with minimal overhead.
+    #
+    # @param name [Symbol] attribute name
+    # @param block [Proc] computation block
+    # @return [void]
+    def generate_simple_inline_method_with_eval(name, block)
+      block_var = "@@lazy_#{name}_block_#{object_id}"
+      class_variable_set(block_var, block)
+
+      method_code = <<~RUBY
+        def #{name}
+          # fast path: return cached value immediately if available
+          return @#{name}_value if @#{name}_computed
+
+          # shared mutex for thread safety - avoid per-method mutex overhead
+          mutex = self.class.instance_variable_get(:@lazy_init_simple_mutex)
+          unless mutex
+            mutex = Mutex.new
+            self.class.instance_variable_set(:@lazy_init_simple_mutex, mutex)
+          end
+
+          mutex.synchronize do
+            # double-check pattern: another thread might have computed while we waited
+            if @#{name}_computed
+              stored_exception = @#{name}_exception
+              raise stored_exception if stored_exception
+              return @#{name}_value
+            end
+
+            begin
+              # perform computation and cache result
+              block = self.class.class_variable_get(:#{block_var})
+              result = instance_eval(&block)
+              @#{name}_value = result
+              @#{name}_computed = true
+              result
+            rescue StandardError => e
+              # cache exceptions to ensure consistent error behavior
+              @#{name}_exception = e
+              @#{name}_computed = true
+              raise
+            end
+          end
+        end
+      RUBY
+
+      class_eval(method_code)
+    end
+
+    # Ruby 2.6+ fallback using define_method for simple methods.
+    # Compatible version of the eval-based simple method.
+    #
+    # @param name [Symbol] attribute name
+    # @param block [Proc] computation block
+    # @return [void]
+    def generate_simple_inline_method_with_define_method(name, block)
       computed_var = "@#{name}_computed"
       value_var = "@#{name}_value"
       exception_var = "@#{name}_exception"
 
-      # cache block reference to avoid lookup in generated method
       cached_block = block
 
       define_method(name) do
         # fast path: return cached value immediately if available
         return instance_variable_get(value_var) if instance_variable_get(computed_var)
 
-        # ensure we have a shared mutex for thread safety
+        # shared mutex for thread safety
         mutex = self.class.instance_variable_get(:@lazy_init_simple_mutex)
         unless mutex
           mutex = Mutex.new
@@ -418,132 +471,402 @@ module LazyInit
       end
     end
 
-    # Generate a method using full LazyValue for complex scenarios.
+    # Generate single dependency method with lightweight resolution.
+    # Uses eval or define_method based on Ruby version capabilities.
     #
-    # This handles timeouts, complex dependencies, and other advanced features
-    # that require the full LazyValue implementation. Used when simple
-    # optimizations aren't applicable.
-    #
-    # @param name [Symbol] the attribute name
-    # @param config [Hash] the attribute configuration
+    # @param name [Symbol] attribute name
+    # @param depends_on [Array<Symbol>, Symbol] dependency specification
+    # @param block [Proc] computation block
     # @return [void]
-    def generate_complex_lazyvalue_method(name, config)
-      # cache configuration to avoid hash lookups in generated method
-      cached_timeout = config[:timeout]
-      cached_depends_on = config[:depends_on]
-      cached_block = config[:block]
+    def generate_simple_dependency_with_resolution(name, depends_on, block)
+      dep_name = Array(depends_on).first
+      dependency_resolver.add_dependency(name, depends_on)
+
+      if LazyInit::RubyCapabilities::IMPROVED_EVAL_PERFORMANCE
+        generate_fast_dependency_method_with_eval(name, dep_name, block)
+      else
+        generate_fast_dependency_method_with_define_method(name, dep_name, block)
+        generate_predicate_method(name)
+        generate_reset_method(name)
+      end
+    end
+
+    # Ruby 3+ eval-based fast dependency method with circular detection.
+    # Includes predicate and reset methods in single eval call for performance.
+    #
+    # @param name [Symbol] attribute name
+    # @param dep_name [Symbol] dependency attribute name
+    # @param block [Proc] computation block
+    # @return [void]
+    def generate_fast_dependency_method_with_eval(name, dep_name, block)
+      block_var = "@@lazy_#{name}_block_#{object_id}"
+      class_variable_set(block_var, block)
+
+      method_code = <<~RUBY
+        def #{name}
+          if @#{name}_computed
+            stored_exception = @#{name}_exception
+            raise stored_exception if stored_exception
+            return @#{name}_value
+          end
+
+          # circular dependency detection
+          resolution_stack = Thread.current[:lazy_init_resolution_stack] ||= []
+          if resolution_stack.include?(:#{name})
+            circular_error = LazyInit::DependencyError.new(
+              "Circular dependency detected: \#{resolution_stack.join(' -> ')} -> #{name}"
+            )
+            @#{name}_exception = circular_error
+            @#{name}_computed = true
+            raise circular_error
+          end
+
+          # lightweight dependency resolution with circular protection
+          resolution_stack.push(:#{name})
+          begin
+            #{dep_name} unless #{dep_name}_computed?
+          ensure
+            resolution_stack.pop
+            Thread.current[:lazy_init_resolution_stack] = nil if resolution_stack.empty?
+          end
+
+          @#{name}_mutex ||= Mutex.new
+          @#{name}_mutex.synchronize do
+            if @#{name}_computed
+              stored_exception = @#{name}_exception#{'  '}
+              raise stored_exception if stored_exception
+              return @#{name}_value
+            end
+
+            begin
+              block = self.class.class_variable_get(:#{block_var})
+              result = instance_eval(&block)
+              @#{name}_value = result
+              @#{name}_computed = true
+              result
+            rescue StandardError => e
+              @#{name}_exception = e
+              @#{name}_computed = true
+              raise
+            end
+          end
+        end
+
+        # generate compatible predicate method
+        def #{name}_computed?
+          @#{name}_computed && !@#{name}_exception
+        end
+
+        # generate compatible reset method
+        def reset_#{name}!
+          @#{name}_mutex&.synchronize do
+            @#{name}_computed = false
+            @#{name}_value = nil
+            @#{name}_exception = nil
+          end
+        end
+      RUBY
+
+      class_eval(method_code)
+    end
+
+    # Ruby 2.6+ define_method version of fast dependency method.
+    # Provides same functionality as eval version with full compatibility.
+    #
+    # @param name [Symbol] attribute name
+    # @param dep_name [Symbol] dependency attribute name
+    # @param block [Proc] computation block
+    # @return [void]
+    def generate_fast_dependency_method_with_define_method(name, dep_name, block)
+      computed_var = "@#{name}_computed"
+      value_var = "@#{name}_value"
+      exception_var = "@#{name}_exception"
+
+      cached_block = block
+      cached_dep_name = dep_name
 
       define_method(name) do
-        # resolve dependencies using full dependency resolver if needed
-        self.class.dependency_resolver.resolve_dependencies(name, self) if cached_depends_on
+        # fast path with exception check
+        if instance_variable_get(computed_var)
+          stored_exception = instance_variable_get(exception_var)
+          raise stored_exception if stored_exception
 
-        # lazy creation of LazyValue wrapper
-        ivar_name = "@#{name}_lazy_value"
-        lazy_value = instance_variable_get(ivar_name) if instance_variable_defined?(ivar_name)
+          return instance_variable_get(value_var)
+        end
 
-        unless lazy_value
-          lazy_value = LazyValue.new(timeout: cached_timeout) do
-            instance_eval(&cached_block)
+        # circular dependency detection
+        resolution_stack = Thread.current[:lazy_init_resolution_stack] ||= []
+        if resolution_stack.include?(name)
+          circular_error = LazyInit::DependencyError.new(
+            "Circular dependency detected: #{resolution_stack.join(' -> ')} -> #{name}"
+          )
+          # cache the error
+          instance_variable_set(exception_var, circular_error)
+          instance_variable_set(computed_var, true)
+          raise circular_error
+        end
+
+        # lightweight dependency resolution with circular protection
+        resolution_stack.push(name)
+        begin
+          send(cached_dep_name) unless send("#{cached_dep_name}_computed?")
+        ensure
+          resolution_stack.pop
+          Thread.current[:lazy_init_resolution_stack] = nil if resolution_stack.empty?
+        end
+
+        # thread-safe computation
+        mutex = self.class.instance_variable_get(:@lazy_init_simple_mutex)
+        unless mutex
+          mutex = Mutex.new
+          self.class.instance_variable_set(:@lazy_init_simple_mutex, mutex)
+        end
+
+        mutex.synchronize do
+          if instance_variable_get(computed_var)
+            stored_exception = instance_variable_get(exception_var)
+            raise stored_exception if stored_exception
+
+            return instance_variable_get(value_var)
           end
-          instance_variable_set(ivar_name, lazy_value)
-        end
 
-        lazy_value.value
+          begin
+            result = instance_eval(&cached_block)
+            instance_variable_set(value_var, result)
+            instance_variable_set(computed_var, true)
+            result
+          rescue StandardError => e
+            instance_variable_set(exception_var, e)
+            instance_variable_set(computed_var, true)
+            raise
+          end
+        end
       end
     end
 
-    # Generate predicate method to check if attribute has been computed.
-    #
-    # Handles both simple (inline variables) and complex (LazyValue) cases.
-    # Returns false for exceptions to maintain consistent behavior.
-    #
-    # @param name [Symbol] the attribute name
-    # @return [void]
-    def generate_predicate_method(name)
-      define_method("#{name}_computed?") do
-        # check simple implementation first (most common after optimization)
-        computed_var = "@#{name}_computed"
-        exception_var = "@#{name}_exception"
-
-        if instance_variable_defined?(computed_var)
-          # simple implementation: computed but not if there's a cached exception
-          return instance_variable_get(computed_var) && !instance_variable_get(exception_var)
-        end
-
-        # check complex implementation (LazyValue wrapper)
-        lazy_var = "@#{name}_lazy_value"
-        if instance_variable_defined?(lazy_var)
-          lazy_value = instance_variable_get(lazy_var)
-          return lazy_value&.computed? || false
-        end
-
-        # not computed yet
-        false
-      end
+    def simple_case_eligible?(timeout, depends_on)
+      timeout.nil? && 
+      (depends_on.nil? || depends_on.empty?) && LazyInit::RubyCapabilities::RUBY_3_PLUS
     end
 
-    # Generate reset method to clear computed state and allow recomputation.
-    #
-    # Handles both simple and complex implementations, ensuring proper
-    # cleanup of all associated state including cached exceptions.
-    #
-    # @param name [Symbol] the attribute name
-    # @return [void]
-    def generate_reset_method(name)
-      define_method("reset_#{name}!") do
-        # handle simple implementation reset
-        computed_var = "@#{name}_computed"
-        value_var = "@#{name}_value"
-        exception_var = "@#{name}_exception"
+    def generate_optimized_simple_method(name, block)
+      if LazyInit::RubyCapabilities::RUBY_3_PLUS
+        generate_ruby3_ultra_simple_method(name, block)
+      else
+        # Fallback to existing implementation
+        generate_simple_inline_method_with_define_method(name, block)
+      end
+      
+      generate_simple_helpers(name)
+    end
 
-        if instance_variable_defined?(computed_var)
-          # use mutex if available for thread safety during reset
-          mutex = self.class.instance_variable_get(:@lazy_init_simple_mutex)
-          if mutex
-            mutex.synchronize do
-              instance_variable_set(computed_var, false)
-              remove_instance_variable(value_var) if instance_variable_defined?(value_var)
-              remove_instance_variable(exception_var) if instance_variable_defined?(exception_var)
+    # Generate ultra-optimized method for Ruby 3+ simple cases.
+    #
+    # Uses eval-based method generation with shared mutex and direct
+    # instance variable access for maximum performance. Stores computation
+    # block in class variable for fast access.
+    #
+    # @param name [Symbol] attribute name
+    # @param block [Proc] computation block
+    # @return [void]
+    # @api private
+    def generate_ruby3_ultra_simple_method(name, block)
+      ensure_shared_mutex
+      
+      block_var = "@@simple_#{name}_#{object_id}"
+      class_variable_set(block_var, block)
+
+      method_code = <<~RUBY
+        def #{name}
+          return @#{name}_value if defined?(@#{name}_value)
+
+          shared_mutex = self.class.instance_variable_get(:@shared_mutex)
+          shared_mutex.synchronize do
+            return @#{name}_value if defined?(@#{name}_value)
+            raise @#{name}_exception if defined?(@#{name}_exception)
+
+            begin
+              @#{name}_value = instance_eval(&self.class.class_variable_get(:#{block_var}))
+            rescue StandardError => e
+              @#{name}_exception = e
+              raise
             end
-          else
-            # no mutex means no concurrent access, safe to reset directly
-            instance_variable_set(computed_var, false)
-            remove_instance_variable(value_var) if instance_variable_defined?(value_var)
-            remove_instance_variable(exception_var) if instance_variable_defined?(exception_var)
           end
-          return
         end
+      RUBY
 
-        # handle complex implementation reset (LazyValue)
-        lazy_var = "@#{name}_lazy_value"
-        if instance_variable_defined?(lazy_var)
-          lazy_value = instance_variable_get(lazy_var)
-          lazy_value&.reset!
-          remove_instance_variable(lazy_var)
+      class_eval(method_code)
+    end
+
+    # Generate predicate and reset helper methods for simple cases.
+    #
+    # Creates computed? and reset! methods that work with the direct
+    # instance variable approach used by simple case optimization.
+    #
+    # @param name [Symbol] attribute name
+    # @return [void]
+    # @api private
+    def generate_simple_helpers(name)
+      define_method("#{name}_computed?") do
+        instance_variable_defined?("@#{name}_value") && !instance_variable_defined?("@#{name}_exception")
+      end
+
+      define_method("reset_#{name}!") do
+        shared_mutex = self.class.instance_variable_get(:@shared_mutex)
+        shared_mutex.synchronize do
+          remove_instance_variable("@#{name}_value") if instance_variable_defined?("@#{name}_value")
+          remove_instance_variable("@#{name}_exception") if instance_variable_defined?("@#{name}_exception")
         end
       end
     end
 
-    # Validate that the attribute name is suitable for method generation.
+    # Ensure shared mutex exists for simple case optimization.
     #
-    # Ensures the name follows Ruby method naming conventions and won't
-    # cause issues when used to generate accessor methods.
+    # Creates a class-level mutex shared by all simple attributes to
+    # reduce memory overhead compared to per-attribute mutexes.
     #
-    # @param name [Object] the proposed attribute name
     # @return [void]
-    # @raise [InvalidAttributeNameError] if the name is invalid
-    def validate_attribute_name!(name)
-      raise InvalidAttributeNameError, 'Attribute name cannot be nil' if name.nil?
-      raise InvalidAttributeNameError, 'Attribute name cannot be empty' if name.to_s.strip.empty?
+    # @api private
+    def ensure_shared_mutex
+      return if instance_variable_defined?(:@shared_mutex)
+      @shared_mutex = Mutex.new
+    end
 
-      unless name.is_a?(Symbol) || name.is_a?(String)
-        raise InvalidAttributeNameError, 'Attribute name must be a symbol or string'
+    # Generate optimized method for single dependency attributes.
+    #
+    # Bypasses dependency resolver overhead by directly checking and
+    # resolving single dependencies inline. Includes circular dependency
+    # detection and thread-safe computation.
+    #
+    # @param name [Symbol] attribute name
+    # @param dep_name [Symbol] dependency attribute name
+    # @param block [Proc] computation block
+    # @return [void]
+    # @api private
+    def generate_simple_dependency_with_inline_check(name, dep_name, block)
+      cached_block = block
+      cached_dep_name = dep_name
+      computed_var = "@#{name}_computed"
+      value_var = "@#{name}_value"
+      exception_var = "@#{name}_exception"
+
+      define_method(name) do
+        # Fast path: return cached result
+        return instance_variable_get(value_var) if instance_variable_get(computed_var)
+
+        # Circular dependency detection BEFORE mutex
+        resolution_stack = Thread.current[:lazy_init_resolution_stack] ||= []
+        if resolution_stack.include?(name)
+          circular_error = LazyInit::DependencyError.new(
+            "Circular dependency detected: #{resolution_stack.join(' -> ')} -> #{name}"
+          )
+          raise circular_error
+        end
+
+        resolution_stack.push(name)
+        begin
+          # Inline dependency check
+          unless send("#{cached_dep_name}_computed?")
+            send(cached_dep_name)
+          end
+
+          # Thread-safe computation
+          mutex = self.class.instance_variable_get(:@lazy_init_class_mutex)
+          mutex.synchronize do
+            return instance_variable_get(value_var) if instance_variable_get(computed_var)
+            
+            begin
+              result = instance_eval(&cached_block)
+              instance_variable_set(value_var, result)
+              instance_variable_set(computed_var, true)
+              result
+            rescue StandardError => e
+              instance_variable_set(exception_var, e)
+              instance_variable_set(computed_var, true)
+              raise
+            end
+          end
+        ensure
+          resolution_stack.pop
+          Thread.current[:lazy_init_resolution_stack] = nil if resolution_stack.empty?
+        end
       end
+    end
 
-      name_str = name.to_s
-      return if name_str.match?(/\A[a-zA-Z_][a-zA-Z0-9_]*[?!]?\z/)
+    # Generate reset method that clears dependency resolution flag.
+    #
+    # Used by attributes with dependency caching to ensure dependencies
+    # are re-resolved after reset. Thread-safe operation that clears
+    # both computed state and dependency resolution state.
+    #
+    # @param name [Symbol] attribute name
+    # @return [void]
+    # @api private
+    def generate_reset_method_with_deps_flag(name)
+      computed_var = "@#{name}_computed"
+      value_var = "@#{name}_value"
+      exception_var = "@#{name}_exception"
+      deps_resolved_var = "@#{name}_deps_resolved"
 
-      raise InvalidAttributeNameError, "Invalid attribute name: #{name_str}"
+      define_method("reset_#{name}!") do
+        mutex = self.class.instance_variable_get(:@lazy_init_class_mutex)
+        mutex.synchronize do
+          remove_instance_variable(value_var) if instance_variable_defined?(value_var)
+          remove_instance_variable(exception_var) if instance_variable_defined?(exception_var)
+          instance_variable_set(computed_var, false)
+          instance_variable_set(deps_resolved_var, false)  # Reset dependency flag
+        end
+      end
+    end
+
+    # Generate method with cached dependency resolution for multiple dependencies.
+    #
+    # Optimizes attributes with multiple dependencies by caching the dependency
+    # resolution step. Once dependencies are resolved for an instance, subsequent
+    # calls skip the dependency resolver entirely.
+    #
+    # @param name [Symbol] attribute name
+    # @param depends_on [Array<Symbol>] dependency attributes
+    # @param block [Proc] computation block
+    # @param config [Hash] attribute configuration
+    # @return [void]
+    # @api private
+    def generate_fast_dependency_method(name, depends_on, block, config)
+      cached_block = block
+      cached_depends_on = depends_on
+      computed_var = "@#{name}_computed"
+      value_var = "@#{name}_value"
+      exception_var = "@#{name}_exception"
+      deps_resolved_var = "@#{name}_deps_resolved"  # flag for resolved deps
+
+      define_method(name) do
+        # Fast path: return cached result
+        return instance_variable_get(value_var) if instance_variable_get(computed_var)
+
+        # Fast dependency check: skip resolution if already resolved
+        unless instance_variable_get(deps_resolved_var)
+          # Only resolve dependencies once
+          self.class.dependency_resolver.resolve_dependencies(name, self)
+          instance_variable_set(deps_resolved_var, true)
+        end
+
+        # Thread-safe computation
+        mutex = self.class.instance_variable_get(:@lazy_init_class_mutex)
+        mutex.synchronize do
+          return instance_variable_get(value_var) if instance_variable_get(computed_var)
+          
+          begin
+            result = instance_eval(&cached_block)
+            instance_variable_set(value_var, result)
+            instance_variable_set(computed_var, true)
+            result
+          rescue StandardError => e
+            instance_variable_set(exception_var, e)
+            instance_variable_set(computed_var, true)
+            raise
+          end
+        end
+      end
     end
   end
 end

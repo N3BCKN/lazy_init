@@ -418,7 +418,7 @@ RSpec.describe LazyInit, 'thread safety' do
       
       # Should use inline variables, not LazyValue
       expect(instance.instance_variable_defined?('@concurrent_value_lazy_value')).to be false
-      expect(instance.instance_variable_defined?('@concurrent_value_computed')).to be true
+      expect(instance.concurrent_value_computed?).to be true
       expect(instance.instance_variable_defined?('@concurrent_value_value')).to be true
     end
 

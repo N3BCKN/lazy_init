@@ -84,91 +84,109 @@ module LazyInit
     def lazy_once(max_entries: nil, ttl: nil, &block)
       raise ArgumentError, 'Block is required' unless block
 
-      # apply global configuration defaults
+      # Apply global configuration defaults
       max_entries ||= LazyInit.configuration.max_lazy_once_entries
       ttl ||= LazyInit.configuration.lazy_once_ttl
 
-      # generate cache key from caller location for automatic memoization
-      call_location = caller_locations(1, 1).first
-      location_key = "#{call_location.path}:#{call_location.lineno}"
+      # Use simplified version ONLY if no advanced features needed
+      if LazyInit::RubyCapabilities::IMPROVED_EVAL_PERFORMANCE &&
+         max_entries.nil? && ttl.nil?
 
-      # ensure thread-safe cache initialization
-      @lazy_once_mutex ||= Mutex.new
+        # Fast path for Ruby 3+ with no TTL/limits
+        location_key = caller_locations(1, 1).first.lineno
 
-      # fast path: check cache outside mutex for performance
-      if @lazy_once_cache&.key?(location_key)
-        cached_entry = @lazy_once_cache[location_key]
+        @lazy_once_simple ||= {}
+        return @lazy_once_simple[location_key] if @lazy_once_simple.key?(location_key)
 
-        # handle TTL expiration if configured
-        if ttl && Time.now - cached_entry[:created_at] > ttl
-          @lazy_once_mutex.synchronize do
-            # double-check TTL after acquiring lock
-            if @lazy_once_cache&.key?(location_key)
-              cached_entry = @lazy_once_cache[location_key]
-              if Time.now - cached_entry[:created_at] > ttl
-                @lazy_once_cache.delete(location_key)
-              else
-                # entry is still valid, update access tracking and return
+        result = block.call
+        @lazy_once_simple[location_key] = result
+        result
+      else
+        # Use existing full implementation for TTL/limits/statistics
+        # (existing lazy_once code with all features)
+
+        # Generate cache key from caller location for automatic memoization
+        call_location = caller_locations(1, 1).first
+        location_key = "#{call_location.path}:#{call_location.lineno}"
+
+        # Ensure thread-safe cache initialization
+        @lazy_once_mutex ||= Mutex.new
+
+        # Fast path: check cache outside mutex for performance
+        if @lazy_once_cache&.key?(location_key)
+          cached_entry = @lazy_once_cache[location_key]
+
+          # Handle TTL expiration if configured
+          if ttl && Time.now - cached_entry[:created_at] > ttl
+            @lazy_once_mutex.synchronize do
+              # Double-check TTL after acquiring lock
+              if @lazy_once_cache&.key?(location_key)
+                cached_entry = @lazy_once_cache[location_key]
+                if Time.now - cached_entry[:created_at] > ttl
+                  @lazy_once_cache.delete(location_key)
+                else
+                  # Entry is still valid, update access tracking and return
+                  cached_entry[:access_count] += 1
+                  cached_entry[:last_accessed] = Time.now if ttl
+                  return cached_entry[:value]
+                end
+              end
+            end
+          else
+            # Cache hit: update access tracking in thread-safe manner
+            @lazy_once_mutex.synchronize do
+              if @lazy_once_cache&.key?(location_key)
+                cached_entry = @lazy_once_cache[location_key]
                 cached_entry[:access_count] += 1
                 cached_entry[:last_accessed] = Time.now if ttl
                 return cached_entry[:value]
               end
             end
           end
-        else
-          # cache hit: update access tracking in thread-safe manner
-          @lazy_once_mutex.synchronize do
-            if @lazy_once_cache&.key?(location_key)
-              cached_entry = @lazy_once_cache[location_key]
+        end
+
+        # Slow path: compute value and cache result
+        @lazy_once_mutex.synchronize do
+          # Double-check pattern
+          if @lazy_once_cache&.key?(location_key)
+            cached_entry = @lazy_once_cache[location_key]
+
+            # Verify TTL hasn't expired while we waited for the lock
+            if ttl && Time.now - cached_entry[:created_at] > ttl
+              @lazy_once_cache.delete(location_key)
+            else
               cached_entry[:access_count] += 1
               cached_entry[:last_accessed] = Time.now if ttl
               return cached_entry[:value]
             end
           end
-        end
-      end
 
-      # slow path: compute value and cache result
-      @lazy_once_mutex.synchronize do
-        # double-check pattern: another thread might have computed while we waited
-        if @lazy_once_cache&.key?(location_key)
-          cached_entry = @lazy_once_cache[location_key]
+          # Initialize cache storage if this is the first lazy_once call
+          @lazy_once_cache ||= {}
 
-          # verify TTL hasn't expired while we waited for the lock
-          if ttl && Time.now - cached_entry[:created_at] > ttl
-            @lazy_once_cache.delete(location_key)
-          else
-            cached_entry[:access_count] += 1
-            cached_entry[:last_accessed] = Time.now if ttl
-            return cached_entry[:value]
+          # Perform LRU cleanup if cache is getting too large
+          cleanup_lazy_once_cache_simple!(max_entries) if @lazy_once_cache.size >= max_entries
+
+          # Compute the value and store in cache
+          begin
+            computed_value = block.call
+
+            # Create cache entry with metadata
+            cache_entry = {
+              value: computed_value,
+              access_count: 1
+            }
+
+            # Add optional metadata only when features are actually used
+            cache_entry[:created_at] = Time.now if ttl
+            cache_entry[:last_accessed] = Time.now if ttl
+
+            @lazy_once_cache[location_key] = cache_entry
+            computed_value
+          rescue StandardError => e
+            # Don't cache exceptions to keep implementation simple
+            raise
           end
-        end
-
-        # initialize cache storage if this is the first lazy_once call
-        @lazy_once_cache ||= {}
-
-        # perform LRU cleanup if cache is getting too large
-        cleanup_lazy_once_cache_simple!(max_entries) if @lazy_once_cache.size >= max_entries
-
-        # compute the value and store in cache with minimal metadata
-        begin
-          computed_value = block.call
-
-          # create cache entry with minimal required metadata for performance
-          cache_entry = {
-            value: computed_value,
-            access_count: 1
-          }
-
-          # add optional metadata only when features are actually used
-          cache_entry[:created_at] = Time.now if ttl
-          cache_entry[:last_accessed] = Time.now if ttl
-
-          @lazy_once_cache[location_key] = cache_entry
-          computed_value
-        rescue StandardError => e
-          # don't cache exceptions to keep implementation simple
-          raise
         end
       end
     end
@@ -232,14 +250,20 @@ module LazyInit
     def lazy_once_statistics
       @lazy_once_mutex ||= Mutex.new
       @lazy_once_mutex.synchronize do
+        simple_cache = @lazy_once_simple || {}
+        complex_cache = @lazy_once_cache || {}
+
+        total_entries = simple_cache.size + complex_cache.size
+        total_accesses = complex_cache.values.sum { |entry| entry[:access_count] || 1 } + simple_cache.size
+
         # return empty stats if no cache exists yet
         unless @lazy_once_cache
           return {
-            total_entries: 0,
-            computed_entries: 0,
+            total_entries: total_entries,
+            computed_entries: total_entries,
             oldest_entry: nil,
             newest_entry: nil,
-            total_accesses: 0,
+            total_accesses: total_accesses,
             average_accesses: 0
           }
         end
