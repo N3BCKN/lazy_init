@@ -66,7 +66,7 @@ Or install it yourself as:
 ```
 ## Requirements:
 
-- Ruby 2.6 or higher
+- Ruby 2.6 or higher (Ruby 3.0+ recommended for best performance)
 - No external dependencies
 
 ## Quick Start
@@ -88,6 +88,7 @@ client = ApiClient.new
 client.connection  # "Establishing connection..." - computed once
 client.connection  # Returns cached result (thread-safe)
 ```
+
 
 ### With Dependencies
 ```ruby
@@ -529,15 +530,22 @@ LazyInit is optimized for production use:
 ```
 ## Performance
 
-Realistic benchmark results (x86_64-darwin19, Ruby 3.0.2):
+Performance varies by Ruby version:
 
-- Initial computation: ~identical (LazyInit setup overhead negligible)
-- Cached access: 3.5x slower than manual ||= 
--100,000 calls: Manual 13ms, LazyInit 45ms
-- In practice: For expensive operations (5-50ms), 0.0004ms per call overhead is negligible.
-- Trade-off: 3.5x cached access cost for 100% thread safety
+**Ruby 3.0+ (Recommended):**
+- Hot path: 1.1-1.4x overhead (excellent!)
+- Cold start: ~13-19x overhead
+- Thread safety: Near-zero overhead
 
-[Full details can be found here](https://github.com/N3BCKN/lazy_init/blob/main/benchmarks/benchmark_performance.rb)
+**Ruby 2.6-2.7:**
+- Hot path: 4x overhead
+- Use mainly for expensive operations or critical thread safety
+
+**Benchmark Summary (Ruby 3.3.1):**
+- Simple lazy attributes: ~10% overhead
+- Complex dependencies: 4x overhead
+- Thread safety: Better than manual synchronization
+
 
 ### Optimization Strategies
 LazyInit automatically selects the best implementation:
@@ -545,6 +553,16 @@ LazyInit automatically selects the best implementation:
 - Simple inline (no dependencies, no timeout): Maximum performance
 - Optimized dependency (single dependency): Balanced performance
 - Full LazyValue (complex scenarios): Full feature set
+
+### Ruby Version Comparison
+
+| Ruby Version | Hot Path Overhead | Best Use Case |
+|--------------|-------------------|---------------|
+| 3.3.1        | 1.1x             | Production ready everywhere |
+| 3.0.2        | 1.4x             | Production ready everywhere |
+| 2.7.5        | 4.1x             | Expensive operations mainly |
+| 2.6.6        | 4.3x             | Expensive operations mainly |
+
 
 
 ## Thread Safety

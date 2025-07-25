@@ -1,68 +1,5 @@
 require 'benchmark'
-require 'lazy_init'
-
-
-# LazyInit vs Manual Performance Benchmark
-# Testing with realistic production-like expensive operations:
-
-# --- Configuration Parsing ---
-# Description: JSON/YAML parsing with complex nested structures
-
-# Warming up (performing actual expensive computation)...
-# Initial computation time:
-#   Manual: 14.25ms
-#   LazyInit: 13.28ms
-#   Difference: -0.96ms
-
-# Benchmarking cached access (100,000 iterations):
-#                  user     system      total        real
-# Manual       0.012272   0.000034   0.012306 (  0.012490)
-# LazyInit     0.041375   0.000231   0.041606 (  0.041994)
-
-# ============================================================
-
-# --- Cryptographic Operations ---
-# Description: Secure token generation with multiple hash rounds
-
-# Warming up (performing actual expensive computation)...
-# Initial computation time:
-#   Manual: 4.65ms
-#   LazyInit: 2.37ms
-#   Difference: -2.28ms
-
-# Benchmarking cached access (100,000 iterations):
-#                  user     system      total        real
-# Manual       0.012351   0.000057   0.012408 (  0.012445)
-# LazyInit     0.042226   0.000220   0.042446 (  0.042752)
-
-# ============================================================
-
-# --- Data Processing ---
-# Description: ETL-style data aggregation and grouping
-
-# Warming up (performing actual expensive computation)...
-# Initial computation time:
-#   Manual: 2.61ms
-#   LazyInit: 2.84ms
-#   Difference: 0.22ms
-
-# Benchmarking cached access (100,000 iterations):
-#                  user     system      total        real
-# Manual       0.012233   0.000048   0.012281 (  0.012375)
-# LazyInit     0.044622   0.000262   0.044884 (  0.045389)
-
-# ============================================================
-
-# Thread Safety Test
-# Testing concurrent access to verify no race conditions...
-# Computing in thread: 60
-# Thread safety results:
-#   Unique object IDs: 1 (should be 1)
-#   All threads got same object: ✅ PASS
-#   Total threads: 10
-# Test Environment: Ruby 3.0.2, x86_64
-# Platform: x86_64-darwin19
-#✅ Thread safety confirmed: All threads received the same computed object
+require_relative '../lib/lazy_init.rb'
 
 module ExpensiveOperations
   def parse_configuration
@@ -244,7 +181,7 @@ puts "Test Environment: Ruby #{RUBY_VERSION}, #{RbConfig::CONFIG['target_cpu']}"
 puts "Platform: #{RUBY_PLATFORM}"
 
 if results.uniq.size == 1
-  puts "\n✅ Thread safety confirmed: All threads received the same computed object"
+  puts "\n Thread safety confirmed: All threads received the same computed object"
 else
-  puts "\n❌ Thread safety failed: Race condition detected!"
+  puts "\n Thread safety failed: Race condition detected!"
 end
