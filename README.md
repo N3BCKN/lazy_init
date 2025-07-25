@@ -533,7 +533,7 @@ LazyInit is optimized for production use:
 Performance varies by Ruby version:
 
 **Ruby 3.0+ (Recommended):**
-- Hot path: 1.1-1.4x overhead (excellent!)
+- Hot path: 1.1-1.4x overhead
 - Cold start: ~13-19x overhead
 - Thread safety: Near-zero overhead
 

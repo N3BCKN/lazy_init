@@ -17,9 +17,6 @@ module LazyInit
     # Ruby 3+ has significantly better eval performance than define_method for generated code
     IMPROVED_EVAL_PERFORMANCE = RUBY_3_PLUS
 
-    # Ruby 3.2+ introduces Object Shapes and M:N thread scheduler
-    RUBY_3_2_PLUS = (RUBY_VERSION.split('.').map(&:to_i) <=> [3, 2, 0]) >= 0
-
     # Future optimization opportunities:
     # RUBY_3_2_PLUS = (RUBY_VERSION.split('.').map(&:to_i) <=> [3, 2, 0]) >= 0
     # OBJECT_SHAPES_AVAILABLE = RUBY_3_2_PLUS  # Faster ivar access
